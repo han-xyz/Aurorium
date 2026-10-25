@@ -46,21 +46,30 @@ static MIGRATIONS: LazyLock<Migrations<'static>> = LazyLock::new(|| {
 });
 
 const ASSET_COLUMNS: &str = "a.file_name, a.tar_file_name, a.file_type, a.size, a.crc, \
-    a.header_crc, a.header_size, a.compressed_header_size";
+    a.header_crc, a.header_size, a.compressed_header_size, a.origin_revision";
 
 const ORIGIN_JOIN: &str =
     "JOIN assets o ON o.revision = a.origin_revision AND o.file_name = a.file_name";
 
-fn asset_from_row(row: &rusqlite::Row) -> rusqlite::Result<Asset> {
-    Ok(Asset {
-        file_name: row.get(0)?,
-        tar_file_name: row.get(1)?,
-        file_type: row.get(2)?,
-        size: row.get(3)?,
-        crc: row.get(4)?,
-        header_crc: row.get(5)?,
-        header_size: row.get(6)?,
-        compressed_header_size: row.get(7)?,
+/// An asset to download, with the revision whose directory holds its file.
+pub struct QueuedAsset {
+    pub asset: Asset,
+    pub origin_revision: String,
+}
+
+fn queued_asset_from_row(row: &rusqlite::Row) -> rusqlite::Result<QueuedAsset> {
+    Ok(QueuedAsset {
+        asset: Asset {
+            file_name: row.get(0)?,
+            tar_file_name: row.get(1)?,
+            file_type: row.get(2)?,
+            size: row.get(3)?,
+            crc: row.get(4)?,
+            header_crc: row.get(5)?,
+            header_size: row.get(6)?,
+            compressed_header_size: row.get(7)?,
+        },
+        origin_revision: row.get(8)?,
     })
 }
 
@@ -133,10 +142,10 @@ impl Database {
         &self,
         revision: Revision,
         fetched_assets: Vec<Asset>,
-    ) -> miette::Result<Vec<Asset>> {
+    ) -> miette::Result<Vec<QueuedAsset>> {
         let assets_to_download = self
         .client
-        .conn_mut_and_then(move |conn: &mut Connection| -> Result<Vec<Asset>, DbError> {
+        .conn_mut_and_then(move |conn: &mut Connection| -> Result<Vec<QueuedAsset>, DbError> {
             let tx = conn.transaction().map_err(DbError::Transaction)?;
 
             tx.execute(
@@ -182,7 +191,7 @@ impl Database {
                 "SELECT {ASSET_COLUMNS} FROM assets a {ORIGIN_JOIN} WHERE a.revision = ?1 AND o.downloaded = 0"
             ))?;
             let assets_to_download = stmt_queue
-                .query_map(params![revision.name], asset_from_row)?
+                .query_map(params![revision.name], queued_asset_from_row)?
                 .collect::<Result<Vec<_>, _>>()?;
 
             drop(stmt_queue);
@@ -196,42 +205,52 @@ impl Database {
     }
 
     /// Resets `downloaded` for every asset of `revision` whose origin file is missing
-    /// under `save_dir/<origin_revision>/`, and returns those assets.
+    /// under `save_dir/<origin_revision>/`, clears `complete` on `revision` if any is,
+    /// and returns those assets.
     pub async fn requeue_missing_files(
         &self,
         revision: &str,
         save_dir: &Path,
-    ) -> Result<Vec<Asset>, DbError> {
+    ) -> Result<Vec<QueuedAsset>, DbError> {
         let revision = revision.to_owned();
         let save_dir = save_dir.to_owned();
         self.client
-            .conn_mut_and_then(move |conn: &mut Connection| -> Result<Vec<Asset>, DbError> {
+            .conn_mut_and_then(move |conn: &mut Connection| -> Result<Vec<QueuedAsset>, DbError> {
                 let tx = conn.transaction().map_err(DbError::Transaction)?;
 
                 let mut stmt_downloaded = tx.prepare(&format!(
-                    "SELECT {ASSET_COLUMNS}, a.origin_revision FROM assets a {ORIGIN_JOIN} WHERE a.revision = ?1 AND o.downloaded = 1"
+                    "SELECT {ASSET_COLUMNS} FROM assets a {ORIGIN_JOIN} WHERE a.revision = ?1 AND o.downloaded = 1"
                 ))?;
                 let missing = stmt_downloaded
-                    .query_map(params![revision], |row| {
-                        Ok((asset_from_row(row)?, row.get::<_, String>(8)?))
-                    })?
+                    .query_map(params![revision], queued_asset_from_row)?
                     .collect::<Result<Vec<_>, _>>()?
                     .into_iter()
-                    .filter(|(asset, origin)| !save_dir.join(origin).join(&asset.file_name).exists())
+                    .filter(|queued| {
+                        !save_dir
+                            .join(&queued.origin_revision)
+                            .join(&queued.asset.file_name)
+                            .exists()
+                    })
                     .collect::<Vec<_>>();
 
                 let mut stmt_reset = tx.prepare(
                     "UPDATE assets SET downloaded = 0 WHERE revision = ?1 AND file_name = ?2",
                 )?;
-                for (asset, origin) in &missing {
-                    stmt_reset.execute(params![origin, asset.file_name])?;
+                for queued in &missing {
+                    stmt_reset.execute(params![queued.origin_revision, queued.asset.file_name])?;
+                }
+                if !missing.is_empty() {
+                    tx.execute(
+                        "UPDATE revisions SET complete = 0 WHERE revision_name = ?1",
+                        params![revision],
+                    )?;
                 }
 
                 drop(stmt_downloaded);
                 drop(stmt_reset);
                 tx.commit().map_err(DbError::Transaction)?;
 
-                Ok(missing.into_iter().map(|(asset, _)| asset).collect())
+                Ok(missing)
             })
             .await
     }
@@ -302,7 +321,7 @@ impl Database {
 
 #[cfg(test)]
 mod tests {
-    use super::Database;
+    use super::{Database, QueuedAsset};
     use crate::revision::{Asset, Revision};
     use rusqlite::Connection;
 
@@ -385,8 +404,8 @@ mod tests {
         }
     }
 
-    fn names(assets: &[Asset]) -> Vec<&str> {
-        let mut names: Vec<&str> = assets.iter().map(|a| a.file_name.as_str()).collect();
+    fn names(queued: &[QueuedAsset]) -> Vec<&str> {
+        let mut names: Vec<&str> = queued.iter().map(|q| q.asset.file_name.as_str()).collect();
         names.sort();
         names
     }
@@ -420,5 +439,23 @@ mod tests {
             .expect("requeue");
         assert_eq!(names(&requeued), ["a.wad"]);
         assert!(!db.mark_revision_complete("R2").await.expect("complete"));
+    }
+
+    #[tokio::test]
+    async fn missing_file_clears_complete() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = Database::init(dir.path().join("t.db").to_str().expect("utf-8 path"))
+            .await
+            .expect("db");
+        db.insert_new_revision(revision("R1", 1), vec![asset("a.wad")])
+            .await
+            .expect("insert R1");
+        db.mark_downloaded("R1", "a.wad").await.expect("mark a");
+        assert!(db.mark_revision_complete("R1").await.expect("complete"));
+
+        db.requeue_missing_files("R1", dir.path())
+            .await
+            .expect("requeue");
+        assert!(db.latest_revision().await.expect("latest").is_none());
     }
 }

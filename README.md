@@ -105,6 +105,7 @@ endpoint = "127.0.0.1:12369"
 concurrent_downloads = 2
 save_directory = "data"
 fetch_interval = 28800
+verify_crc = false
 
 [patch]
 host = "patch.us.wizard101.com"
@@ -119,17 +120,24 @@ level = "info"
 file_logging = false
 ```
 
-| Section              | Field                  | Description                                           | Default                  |
-| -------------------- | ---------------------- | ----------------------------------------------------- | ------------------------ |
-| `[server]`           | `endpoint`             | Address the file server binds to                      | `127.0.0.1:12369`        |
-| `[fetcher]`          | `concurrent_downloads` | Number of assets to download in parallel              | `2`                      |
-| `[fetcher]`          | `save_directory`       | Where fetched assets are stored on disk               | `data`                   |
-| `[fetcher]`          | `fetch_interval`       | Seconds between revision checks                       | `28800` (8 hours)        |
-| `[patch]`            | `host`                 | Patch server host to poll for revisions               | `patch.us.wizard101.com` |
-| `[patch]`            | `port`                 | Patch server port                                     | `12500`                  |
-| `[database]`         | `path`                 | Path to the SQLite database file                      | `aurorium.db`            |
-| `[debug]` (optional) | `level`                | Log level (`trace`, `debug`, `info`, `warn`, `error`) | `info`                   |
-| `[debug]` (optional) | `file_logging`         | Whether to also write logs to `logs/`                 | `false`                  |
+| Section              | Field                  | Description                                                                                   | Default                  |
+| -------------------- | ---------------------- | --------------------------------------------------------------------------------------------- | ------------------------ |
+| `[server]`           | `endpoint`             | Address the file server binds to                                                              | `127.0.0.1:12369`        |
+| `[fetcher]`          | `concurrent_downloads` | Number of assets to download in parallel                                                      | `2`                      |
+| `[fetcher]`          | `save_directory`       | Where fetched assets are stored on disk                                                       | `data`                   |
+| `[fetcher]`          | `fetch_interval`       | Seconds between revision checks                                                               | `28800` (8 hours)        |
+| `[fetcher]`          | `verify_crc`           | Reject a downloaded asset whose CRC does not match the manifest (see [Integrity](#integrity)) | `false`                  |
+| `[patch]`            | `host`                 | Patch server host to poll for revisions                                                       | `patch.us.wizard101.com` |
+| `[patch]`            | `port`                 | Patch server port                                                                             | `12500`                  |
+| `[database]`         | `path`                 | Path to the SQLite database file                                                              | `aurorium.db`            |
+| `[debug]` (optional) | `level`                | Log level (`trace`, `debug`, `info`, `warn`, `error`)                                         | `info`                   |
+| `[debug]` (optional) | `file_logging`         | Whether to also write logs to `logs/`                                                         | `false`                  |
+
+### Integrity
+
+Every downloaded asset is checked against the manifest. A file whose byte count differs from the manifest `size` is deleted and retried on the next check. A file already on disk with the right size, for example from before an upgrade, is recorded as downloaded without fetching it again.
+
+The CRC is computed as CRC-32 with initial value 0, reflected polynomial `0xEDB88320` and no final XOR. It is not yet confirmed that this is the variant behind the manifest's per-asset `CRC`, so by default a CRC mismatch is only logged at `warn` and the file is kept. To check, compute that CRC over `Marleybone-MB_Station-MB_Station_Hub.wad` after a real download; it should be `2084731962`. If it matches, set `verify_crc = true` so mismatching files are deleted and retried.
 
 ## HTTP API
 

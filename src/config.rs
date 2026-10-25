@@ -13,6 +13,8 @@ pub struct FetcherConfig {
     pub concurrent_downloads: NonZeroUsize,
     pub save_directory: String,
     pub fetch_interval: u64,
+    #[serde(default)]
+    pub verify_crc: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -72,6 +74,7 @@ impl Default for AppConfig {
                 concurrent_downloads: unsafe { NonZeroUsize::new_unchecked(2) },
                 fetch_interval: 60 * 60 * 8,
                 save_directory: "data".to_string(),
+                verify_crc: false,
             },
             database: DBConfig {
                 path: "aurorium.db".to_string(),

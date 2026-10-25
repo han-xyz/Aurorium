@@ -147,6 +147,7 @@ async fn revision_checker(config: AppConfig, db: Database) -> miette::Result<()>
         fetch_interval,
         concurrent_downloads,
         save_directory,
+        verify_crc,
         ..
     } = &config.fetcher;
 
@@ -182,6 +183,7 @@ async fn revision_checker(config: AppConfig, db: Database) -> miette::Result<()>
                         save_directory,
                         assets,
                         db.clone(),
+                        *verify_crc,
                     )
                     .unwrap();
 

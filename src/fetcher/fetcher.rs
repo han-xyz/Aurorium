@@ -20,6 +20,7 @@ pub trait Fetcher {
     /// Streams an HTTP response to disk, optionally driving a progress bar.
     /// When `expected_size` or `expected_crc` (KingsIsle CRC-32, see [`Crc32`]) is given
     /// and the body does not match, the partial file is deleted and an error is returned.
+    /// Returns the CRC of the written body.
     ///
     /// # Panics
     /// This function will panic if any of the following conditions are met:
@@ -36,7 +37,7 @@ pub trait Fetcher {
         progress: Option<&ProgressBar>,
         expected_size: Option<u64>,
         expected_crc: Option<u32>,
-    ) -> miette::Result<()>
+    ) -> miette::Result<u32>
     where
         P: AsRef<Path>,
     {
@@ -56,7 +57,7 @@ pub trait Fetcher {
         let mut writer = BufWriter::with_capacity(128 * 1024, file); // TODO: Let the user configure this buffer size(?)
 
         // Stream response to file in chunks (to avoid loading the entire file into memory)
-        let result: miette::Result<()> = async {
+        let result: miette::Result<u32> = async {
             let mut size = 0u64;
             let mut crc = Crc32::default();
             while let Some(chunk) = response
@@ -93,22 +94,25 @@ pub trait Fetcher {
                 }
                 .into());
             }
-            Ok(())
+            Ok(crc)
         }
         .await;
 
         // If there was an error during the download, remove the partial file and return the error
-        if let Err(e) = result {
-            let _ = tokio::fs::remove_file(&part_path).await;
-            return Err(e);
-        }
+        let crc = match result {
+            Ok(crc) => crc,
+            Err(e) => {
+                let _ = tokio::fs::remove_file(&part_path).await;
+                return Err(e);
+            }
+        };
 
         // Rename the .part file to the final filename
         tokio::fs::rename(&part_path, final_path)
             .await
             .map_err(FetcherTraitError::Rename)?;
 
-        Ok(())
+        Ok(crc)
     }
 
     fn part_path(path: &Path) -> PathBuf {
@@ -203,5 +207,25 @@ mod tests {
             Some(FetcherTraitError::CrcMismatch { .. })
         ));
         assert_nothing_written(&path);
+    }
+
+    #[tokio::test]
+    async fn matching_download_is_kept() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("a.wad");
+
+        let crc = TestFetcher::write_to_file_streamed(
+            &path,
+            serve_body_once().await,
+            None,
+            Some(BODY.len() as u64),
+            Some(BODY_CRC),
+        )
+        .await
+        .expect("verified write");
+
+        assert_eq!(crc, BODY_CRC);
+        assert_eq!(std::fs::read(&path).expect("final file"), BODY);
+        assert!(!TestFetcher::part_path(&path).exists());
     }
 }
