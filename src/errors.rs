@@ -286,11 +286,4 @@ pub enum RouteError {
 
     #[error("Bad request: {0}")]
     BadRequest(String),
-
-    #[error("Invalid working directory")]
-    #[diagnostic(
-        code(route::invalid_working_dir),
-        help("The server's working directory is invalid. Please check the server configuration.")
-    )]
-    InvalidWorkingDir(#[from] std::io::Error),
 }

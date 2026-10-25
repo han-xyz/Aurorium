@@ -4,6 +4,7 @@ use crate::{
 };
 use reqwest::Client;
 use std::{
+    io::ErrorKind,
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -64,7 +65,13 @@ impl ManifestFetcher {
             info!(path = %path.display(), "XML manifest already cached, skipping download");
         }
 
-        let assets = parse_file_list(path).unwrap_or(vec![]);
+        let assets = match parse_file_list(&path) {
+            Ok(assets) => assets,
+            Err(e) => {
+                Self::remove_cached(&path).await?;
+                return Err(e);
+            }
+        };
         debug!("Parsed {} entries from LatestFileList.xml", assets.len());
 
         if assets.is_empty() {
@@ -73,6 +80,91 @@ impl ManifestFetcher {
 
         Ok(assets)
     }
+
+    async fn remove_cached(path: &Path) -> miette::Result<()> {
+        match tokio::fs::remove_file(path).await {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(ManifestFetcherError::Io(e).into()),
+        }
+    }
 }
 
 impl Fetcher for ManifestFetcher {}
+
+#[cfg(test)]
+mod tests {
+    use super::ManifestFetcher;
+    use crate::{revision::Revision, wizard_patcher::WizardPatcher};
+    use std::path::Path;
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
+
+    const REVISION: &str = "V_r1.Wizard_1_0";
+
+    fn manifest_fetcher(list_file_url: String, save_directory: &Path) -> ManifestFetcher {
+        let wizard_patcher = WizardPatcher {
+            list_file_url,
+            url_prefix: String::new(),
+            revision: Revision {
+                name: REVISION.to_string(),
+                number: 1,
+            },
+        };
+        ManifestFetcher::new(wizard_patcher, save_directory).expect("manifest fetcher")
+    }
+
+    async fn serve_404_once() -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept");
+            let mut request = [0u8; 1024];
+            let _ = socket.read(&mut request).await;
+            let body = "not found";
+            let response = format!(
+                "HTTP/1.1 404 Not Found\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            socket
+                .write_all(response.as_bytes())
+                .await
+                .expect("write response");
+        });
+        format!("http://{addr}/{REVISION}/Windows/LatestFileList.bin")
+    }
+
+    #[tokio::test]
+    async fn fetch_404_is_error_no_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let fetcher = manifest_fetcher(serve_404_once().await, dir.path());
+
+        assert!(fetcher.fetch_bin_manifest().await.is_err());
+
+        let revision_dir = dir.path().join(REVISION);
+        assert!(!revision_dir.join("LatestFileList.bin").exists());
+        assert!(!revision_dir.join("LatestFileList.bin.part").exists());
+    }
+
+    #[tokio::test]
+    async fn bad_manifest_deleted_and_error() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let revision_dir = dir.path().join(REVISION);
+        std::fs::create_dir_all(&revision_dir).expect("revision dir");
+        let manifest = revision_dir.join("LatestFileList.xml");
+        std::fs::write(
+            &manifest,
+            "<LatestFileList><RECORD><SrcFileName>a.wad</SrcFileName></LatestFileList>",
+        )
+        .expect("write manifest");
+        let fetcher = manifest_fetcher(
+            format!("http://127.0.0.1:9/{REVISION}/Windows/LatestFileList.bin"),
+            dir.path(),
+        );
+
+        assert!(fetcher.fetch_xml_manifest().await.is_err());
+        assert!(!manifest.exists());
+    }
+}

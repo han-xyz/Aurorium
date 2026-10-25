@@ -23,14 +23,6 @@ impl IntoResponse for RouteError {
                 warn!(error = %err, "Database error occurred");
                 (StatusCode::INTERNAL_SERVER_ERROR).into_response()
             }
-            RouteError::InvalidWorkingDir(dir) => {
-                tracing::error!(error = %dir, "Invalid working directory");
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "Server misconfiguration: Invalid working directory",
-                )
-                    .into_response()
-            }
             RouteError::BadRequest(file_path) => (
                 StatusCode::BAD_REQUEST,
                 format!("Invalid file path: {file_path}"),
@@ -140,6 +132,7 @@ mod tests {
             "/%2Fabs/LatestFileList.xml",
             "/../LatestFileList.xml",
             "/x%00y/LatestFileList.xml",
+            "/a%5Cb/LatestFileList.xml",
         ] {
             assert_eq!(status_of(&app, uri).await, StatusCode::BAD_REQUEST, "{uri}");
         }

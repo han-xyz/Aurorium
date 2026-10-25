@@ -68,14 +68,21 @@ where
                                 Some(text.into_owned())
                             }
                         }
-                        Field::FileType => current.file_type = text.parse().unwrap_or_default(),
-                        Field::Size => current.size = text.parse().unwrap_or_default(),
-                        Field::HeaderSize => current.header_size = text.parse().unwrap_or_default(),
-                        Field::CompressedHeaderSize => {
-                            current.compressed_header_size = text.parse().unwrap_or_default();
+                        Field::FileType => {
+                            current.file_type = text.parse().map_err(XmlParseError::Parse)?
                         }
-                        Field::Crc => current.crc = text.parse().unwrap_or_default(),
-                        Field::HeaderCrc => current.header_crc = text.parse().unwrap_or_default(),
+                        Field::Size => current.size = text.parse().map_err(XmlParseError::Parse)?,
+                        Field::HeaderSize => {
+                            current.header_size = text.parse().map_err(XmlParseError::Parse)?
+                        }
+                        Field::CompressedHeaderSize => {
+                            current.compressed_header_size =
+                                text.parse().map_err(XmlParseError::Parse)?;
+                        }
+                        Field::Crc => current.crc = text.parse().map_err(XmlParseError::Parse)?,
+                        Field::HeaderCrc => {
+                            current.header_crc = text.parse().map_err(XmlParseError::Parse)?
+                        }
                     }
                 }
             }
@@ -138,5 +145,20 @@ mod tests {
             .collect();
 
         assert_eq!(names, ["Data/GameData/Root.wad"]);
+    }
+
+    #[test]
+    fn numeric_parse_error_propagates() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("LatestFileList.xml");
+        std::fs::write(
+            &path,
+            "<LatestFileList>\
+             <RECORD><SrcFileName>Data/GameData/Root.wad</SrcFileName><Size TYPE=\"UINT\">abc</Size></RECORD>\
+             </LatestFileList>",
+        )
+        .expect("write manifest");
+
+        assert!(parse_file_list(&path).is_err());
     }
 }

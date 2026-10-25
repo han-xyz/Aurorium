@@ -54,7 +54,11 @@ async fn main() -> Result<()> {
     // Initialize database
     let db = Database::init(&config.database.path).await?;
 
-    let save_directory = std::path::absolute(&config.fetcher.save_directory).into_diagnostic()?;
+    let save_directory = if config.fetcher.save_directory.is_empty() {
+        std::env::current_dir().into_diagnostic()?
+    } else {
+        std::path::absolute(&config.fetcher.save_directory).into_diagnostic()?
+    };
     let state = AppState::new(config.clone(), db.clone(), save_directory);
     tokio::select! {
         res = revision_checker(config, db) => {

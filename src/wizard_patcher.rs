@@ -1,7 +1,7 @@
 use crate::{
     errors::WizardPatcherError,
     revision::Revision,
-    utils::{Endianness, hex_decode},
+    utils::{Endianness, hex_decode, is_safe_relative},
 };
 use regex::Regex;
 use std::{io::Cursor, sync::LazyLock, time::Duration};
@@ -151,6 +151,9 @@ impl WizardPatcher {
     fn capture_revision(url: &str) -> miette::Result<Revision> {
         if let Some(captures) = LIST_URL_RE.captures(url).and_then(|c| c.get(1)) {
             let revision_name = captures.as_str().to_string();
+            if !is_safe_relative(&revision_name) {
+                return Err(WizardPatcherError::RevisionParseError(revision_name).into());
+            }
             let revision_number = Self::extract_revision_number(&revision_name)?;
 
             return Ok(Revision {
@@ -177,5 +180,16 @@ impl WizardPatcher {
         }
 
         Err(WizardPatcherError::RevisionParseError(name.to_string()))?
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::WizardPatcher;
+
+    #[test]
+    fn revision_name_unsafe_rejected() {
+        let url = r"http://patch.example/WizPatcher/V_r1.Wizard\..\..\x/Windows/LatestFileList.bin";
+        assert!(WizardPatcher::capture_revision(url).is_err());
     }
 }
