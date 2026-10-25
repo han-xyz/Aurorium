@@ -75,6 +75,7 @@ impl ManifestFetcher {
         debug!("Parsed {} entries from LatestFileList.xml", assets.len());
 
         if assets.is_empty() {
+            Self::remove_cached(&path).await?;
             return Err(ManifestFetcherError::EmptyAssetList.into());
         }
 
@@ -95,7 +96,7 @@ impl Fetcher for ManifestFetcher {}
 #[cfg(test)]
 mod tests {
     use super::ManifestFetcher;
-    use crate::{revision::Revision, wizard_patcher::WizardPatcher};
+    use crate::{errors::ManifestFetcherError, revision::Revision, wizard_patcher::WizardPatcher};
     use std::path::Path;
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
@@ -165,6 +166,29 @@ mod tests {
         );
 
         assert!(fetcher.fetch_xml_manifest().await.is_err());
+        assert!(!manifest.exists());
+    }
+
+    #[tokio::test]
+    async fn empty_manifest_deleted_and_error() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let revision_dir = dir.path().join(REVISION);
+        std::fs::create_dir_all(&revision_dir).expect("revision dir");
+        let manifest = revision_dir.join("LatestFileList.xml");
+        std::fs::write(&manifest, "<LatestFileList></LatestFileList>").expect("write manifest");
+        let fetcher = manifest_fetcher(
+            format!("http://127.0.0.1:9/{REVISION}/Windows/LatestFileList.bin"),
+            dir.path(),
+        );
+
+        let err = fetcher
+            .fetch_xml_manifest()
+            .await
+            .expect_err("empty manifest");
+        assert!(matches!(
+            err.downcast_ref::<ManifestFetcherError>(),
+            Some(ManifestFetcherError::EmptyAssetList)
+        ));
         assert!(!manifest.exists());
     }
 }
