@@ -6,8 +6,8 @@ use crate::{
     wizard_patcher::WizardPatcher,
 };
 use axum::{Router, routing::get};
-use miette::Result;
-use std::{net::SocketAddr, time::Duration};
+use miette::{IntoDiagnostic, Result};
+use std::{net::SocketAddr, path::PathBuf, time::Duration};
 use tokio::{net::TcpListener, time::sleep};
 use tracing::{error, info, level_filters::LevelFilter, warn};
 use tracing_appender::non_blocking::WorkerGuard;
@@ -30,11 +30,16 @@ mod routes;
 pub struct AppState {
     pub config: AppConfig,
     pub db: Database,
+    pub save_directory: PathBuf,
 }
 
 impl AppState {
-    pub fn new(config: AppConfig, db: Database) -> Self {
-        Self { config, db }
+    pub fn new(config: AppConfig, db: Database, save_directory: PathBuf) -> Self {
+        Self {
+            config,
+            db,
+            save_directory,
+        }
     }
 }
 
@@ -49,7 +54,8 @@ async fn main() -> Result<()> {
     // Initialize database
     let db = Database::init(&config.database.path).await?;
 
-    let state = AppState::new(config.clone(), db.clone());
+    let save_directory = std::path::absolute(&config.fetcher.save_directory).into_diagnostic()?;
+    let state = AppState::new(config.clone(), db.clone(), save_directory);
     tokio::select! {
         res = revision_checker(config, db) => {
             if let Err(e) = res {
@@ -186,14 +192,18 @@ async fn revision_checker(config: AppConfig, db: Database) -> miette::Result<()>
     }
 }
 
-async fn file_server(state: AppState) -> miette::Result<()> {
-    let ServerConfig { endpoint, .. } = &state.config.server;
-
-    let app = Router::new()
+fn router(state: AppState) -> Router {
+    Router::new()
         .route("/revisions", get(get_revisions))
         .route("/latest", get(get_latest_revision))
         .route("/{revision}/{*file_path}", get(file))
-        .with_state(state.clone());
+        .with_state(state)
+}
+
+async fn file_server(state: AppState) -> miette::Result<()> {
+    let ServerConfig { endpoint, .. } = &state.config.server;
+
+    let app = router(state.clone());
 
     let listener = TcpListener::bind(&endpoint).await.unwrap();
     info!("File server listening on {}", &endpoint);

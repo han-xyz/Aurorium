@@ -1,6 +1,7 @@
-use crate::{errors::XmlParseError, revision::Asset};
+use crate::{errors::XmlParseError, revision::Asset, utils::is_safe_relative};
 use quick_xml::{Reader, events::Event};
 use std::{fs::File, io::BufReader, path::Path};
+use tracing::warn;
 
 enum Field {
     Src,
@@ -83,7 +84,12 @@ where
                 b"_TableList" | b"About" => depth_skipped = depth_skipped.saturating_sub(1),
                 b"RECORD" => {
                     if in_record && depth_skipped == 0 {
-                        entries.push(std::mem::take(&mut current));
+                        let asset = std::mem::take(&mut current);
+                        if is_safe_relative(&asset.file_name) {
+                            entries.push(asset);
+                        } else {
+                            warn!(file = ?asset.file_name, "Dropping manifest record with unsafe file name");
+                        }
                     }
                     in_record = false;
                 }
@@ -105,4 +111,32 @@ where
     }
 
     Ok(entries)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_file_list;
+
+    #[test]
+    fn manifest_bad_name_dropped() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("LatestFileList.xml");
+        std::fs::write(
+            &path,
+            "<LatestFileList>\
+             <RECORD><SrcFileName>Data/GameData/Root.wad</SrcFileName><Size>10</Size></RECORD>\
+             <RECORD><SrcFileName>../../evil.wad</SrcFileName><Size>10</Size></RECORD>\
+             <RECORD><SrcFileName>/abs/evil.wad</SrcFileName><Size>10</Size></RECORD>\
+             </LatestFileList>",
+        )
+        .expect("write manifest");
+
+        let names: Vec<String> = parse_file_list(&path)
+            .expect("parse")
+            .into_iter()
+            .map(|asset| asset.file_name)
+            .collect();
+
+        assert_eq!(names, ["Data/GameData/Root.wad"]);
+    }
 }

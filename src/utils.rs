@@ -1,10 +1,22 @@
-use std::net::SocketAddr;
+use std::{
+    net::SocketAddr,
+    path::{Component, Path},
+};
 
 use axum::{
     extract::{ConnectInfo, FromRequestParts},
     http::request::Parts,
 };
 use reqwest::StatusCode;
+
+#[must_use]
+pub fn is_safe_relative(name: &str) -> bool {
+    !name.is_empty()
+        && !name.contains(['\0', '\\'])
+        && Path::new(name)
+            .components()
+            .all(|c| matches!(c, Component::Normal(_)))
+}
 
 pub enum Endianness {
     Little,
@@ -57,5 +69,31 @@ where
             .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
 
         Ok(ConnectionAddr(connection_info.0.ip().to_string()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_safe_relative;
+
+    #[test]
+    fn safe_relative_matrix() {
+        for name in ["V_r803238.Wizard_1_610", "Data/GameData/Root.wad", "a.b"] {
+            assert!(is_safe_relative(name), "{name:?} should be accepted");
+        }
+        for name in [
+            "",
+            "..",
+            "../x",
+            "a/../x",
+            "/etc/passwd",
+            "C:\\x",
+            "a\\b",
+            "a\0b",
+            ".",
+            "./x",
+        ] {
+            assert!(!is_safe_relative(name), "{name:?} should be rejected");
+        }
     }
 }
