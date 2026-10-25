@@ -1,0 +1,19 @@
+[server]
+endpoint = "0.0.0.0:12369"
+
+[fetcher]
+concurrent_downloads = 2
+save_directory = "data"
+fetch_interval = 28800
+verify_crc = false
+
+[patch]
+host = "patch.us.wizard101.com"
+port = "12500"
+
+[database]
+path = "data/aurorium.db"
+
+[debug]
+level = "info"
+file_logging = false

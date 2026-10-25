@@ -20,6 +20,7 @@
 - [Architecture](#architecture)
 - [Getting Started](#getting-started)
 - [Configuration](#configuration)
+- [Docker](#docker)
 - [HTTP API](#http-api)
 - [Migrating from v3.x](#migrating-from-v3x)
 - [Contributing](#contributing)
@@ -138,6 +139,15 @@ file_logging = false
 Every downloaded asset is checked against the manifest. A file whose byte count differs from the manifest `size` is deleted and retried on the next check. A file already on disk with the right size, for example from before an upgrade, is recorded as downloaded without fetching it again.
 
 The CRC is computed as CRC-32 with initial value 0, reflected polynomial `0xEDB88320` and no final XOR. It is not yet confirmed that this is the variant behind the manifest's per-asset `CRC`, so by default a CRC mismatch is only logged at `warn` and the file is kept. To check, compute that CRC over `Marleybone-MB_Station-MB_Station_Hub.wad` after a real download; it should be `2084731962`. If it matches, set `verify_crc = true` so mismatching files are deleted and retried.
+
+## Docker
+
+```bash
+docker build -t aurorium .
+docker run -v aurorium-data:/app/data -p 127.0.0.1:12369:12369 aurorium
+```
+
+The image bakes in `deploy/config.docker.toml`: the file server binds `0.0.0.0:12369`, assets and the database live under `/app/data` (the volume), and logs go to stdout. `verify_crc` stays `false`; flip it in that file once you have verified one asset (see [Integrity](#integrity)). The compose file in the host repo does not publish the port; other services reach it as `http://aurorium:12369`.
 
 ## HTTP API
 
