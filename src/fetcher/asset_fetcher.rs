@@ -4,6 +4,7 @@ use crate::{
     errors::AssetFetcherError,
     fetcher::fetcher::Fetcher,
     revision::Asset,
+    utils::is_safe_relative,
     wizard_patcher::WizardPatcher,
 };
 use futures_util::{StreamExt, stream};
@@ -104,23 +105,29 @@ impl<'a> AssetFetcher<'a> {
 
             async move {
                 let file = &queued.asset;
+                let origin = &queued.origin_revision;
+                if !is_safe_relative(origin) || origin.contains('/') || !is_safe_relative(&file.file_name) {
+                    warn!(file = ?file.file_name, origin = ?origin, "unsafe stored asset name, skipped");
+                    main_progress.inc(1);
+                    return;
+                }
                 let url = format!("{url_prefix}/{}", file.file_name);
                 let save_path = save_dir.join(&queued.origin_revision).join(&file.file_name);
 
                 if Self::is_accepted_on_disk(&save_path, file, verify_crc).await {
-                    trace!(file = %file.file_name, "already on disk, skipping download");
+                    trace!(file = ?file.file_name, "already on disk, skipping download");
                     Self::record_downloaded(&db, queued).await;
                     main_progress.inc(1);
                     return;
                 }
 
-                trace!(url = %url, file = %file.file_name, "starting download");
+                trace!(url = ?url, file = ?file.file_name, "starting download");
 
                 // Download the file and write it to disk
                 match client.get(&url).send().await {
                     Ok(res) => {
                         if !res.status().is_success() {
-                            warn!(response=res.status().as_u16(), file = %file.file_name, "failed to download asset");
+                            warn!(response=res.status().as_u16(), file = ?file.file_name, "failed to download asset");
                             main_progress.inc(1);
                             return;
                         }
@@ -141,7 +148,7 @@ impl<'a> AssetFetcher<'a> {
                                 Self::record_downloaded(&db, queued).await;
                             }
                             Err(e) => {
-                                warn!(error = %e, file = %file.file_name, "failed to write file to disk");
+                                warn!(error = %e, file = ?file.file_name, "failed to write file to disk");
                             }
                         }
 
@@ -149,7 +156,7 @@ impl<'a> AssetFetcher<'a> {
                     },
                     Err(e) => {
                         // TODO: Handle retries (or log failures in a separate list)
-                        warn!(error = %e, file = %file.file_name, "failed to download file");
+                        warn!(error = %e, file = ?file.file_name, "failed to download file");
                     }
                 }
 
@@ -168,8 +175,6 @@ impl<'a> AssetFetcher<'a> {
         Ok(())
     }
 
-    /// A file left on disk with the manifest size counts as downloaded; a CRC mismatch
-    /// rejects it only when `verify_crc` is set.
     async fn is_accepted_on_disk(path: &Path, file: &Asset, verify_crc: bool) -> bool {
         let Ok(metadata) = tokio::fs::metadata(path).await else {
             return false;
@@ -180,7 +185,7 @@ impl<'a> AssetFetcher<'a> {
         let crc = match Self::file_crc(path).await {
             Ok(crc) => crc,
             Err(e) => {
-                warn!(error = %e, file = %file.file_name, "failed to read file on disk");
+                warn!(error = %e, file = ?file.file_name, "failed to read file on disk");
                 return false;
             }
         };
@@ -206,7 +211,7 @@ impl<'a> AssetFetcher<'a> {
 
     fn warn_crc_mismatch(file: &Asset, actual: u32) {
         warn!(
-            file = %file.file_name,
+            file = ?file.file_name,
             expected = file.crc,
             actual,
             "CRC does not match the manifest"
@@ -218,7 +223,7 @@ impl<'a> AssetFetcher<'a> {
             .mark_downloaded(&queued.origin_revision, &queued.asset.file_name)
             .await
         {
-            warn!(error = %e, file = %queued.asset.file_name, "failed to mark asset as downloaded");
+            warn!(error = %e, file = ?queued.asset.file_name, "failed to mark asset as downloaded");
         }
     }
 }
@@ -230,50 +235,25 @@ mod tests {
     use super::AssetFetcher;
     use crate::{
         db::Database,
+        fetcher::test_support::{BODY, BODY_CRC, respond},
         revision::{Asset, Revision},
         wizard_patcher::WizardPatcher,
     };
-    use std::{
-        num::NonZeroUsize,
-        path::Path,
-        sync::{
-            Arc,
-            atomic::{AtomicUsize, Ordering},
-        },
-    };
-    use tokio::{
-        io::{AsyncReadExt, AsyncWriteExt},
-        net::TcpListener,
-    };
+    use rusqlite::Connection;
+    use std::{num::NonZeroUsize, path::Path};
 
     const REVISION: &str = "V_r1.Wizard_1_0";
-    const BODY: &[u8] = b"123456789";
-    const BODY_CRC: u32 = 0x2dfd_2d88;
+    const OK: &str = "200 OK";
 
-    async fn serve_body(requests: Arc<AtomicUsize>) -> String {
-        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
-        let addr = listener.local_addr().expect("addr");
-        tokio::spawn(async move {
-            loop {
-                let (mut socket, _) = listener.accept().await.expect("accept");
-                requests.fetch_add(1, Ordering::SeqCst);
-                let mut request = [0u8; 1024];
-                let _ = socket.read(&mut request).await;
-                let head = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                    BODY.len()
-                );
-                socket.write_all(head.as_bytes()).await.expect("write head");
-                socket.write_all(BODY).await.expect("write body");
-            }
-        });
-        format!("http://{addr}")
-    }
-
-    async fn fetch(root: &Path, crc: u32, verify_crc: bool) -> (Database, usize) {
-        let requests = Arc::new(AtomicUsize::new(0));
-        let url_prefix = serve_body(requests.clone()).await;
-        let db = Database::init(root.join("test.db").to_str().expect("utf-8 path"))
+    async fn fetch(
+        save_dir: &Path,
+        file_name: &str,
+        crc: u32,
+        status: &'static str,
+        verify_crc: bool,
+    ) -> (Database, usize) {
+        let server = respond(status, BODY).await;
+        let db = Database::init(save_dir.join("test.db").to_str().expect("utf-8 path"))
             .await
             .expect("db");
         let revision = Revision {
@@ -281,7 +261,7 @@ mod tests {
             number: 1,
         };
         let asset = Asset {
-            file_name: "a.wad".to_string(),
+            file_name: file_name.to_string(),
             size: BODY.len() as u32,
             crc,
             ..Asset::default()
@@ -292,14 +272,14 @@ mod tests {
             .expect("insert");
         let wizard_patcher = WizardPatcher {
             list_file_url: String::new(),
-            url_prefix,
+            url_prefix: server.url.clone(),
             revision,
         };
 
         AssetFetcher::new(
             wizard_patcher,
             &NonZeroUsize::MIN,
-            root,
+            save_dir,
             queued,
             db.clone(),
             verify_crc,
@@ -309,18 +289,29 @@ mod tests {
         .await
         .expect("fetch");
 
-        (db, requests.load(Ordering::SeqCst))
+        (db, server.hits())
+    }
+
+    fn downloaded(save_dir: &Path, file_name: &str) -> i64 {
+        Connection::open(save_dir.join("test.db"))
+            .expect("open db")
+            .query_row(
+                "SELECT downloaded FROM assets WHERE revision = ?1 AND file_name = ?2",
+                [REVISION, file_name],
+                |row| row.get(0),
+            )
+            .expect("asset row")
     }
 
     #[tokio::test]
     async fn crc_mismatch_kept_unless_verify_crc() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let (db, _) = fetch(dir.path(), BODY_CRC ^ 1, false).await;
+        let (db, _) = fetch(dir.path(), "a.wad", BODY_CRC ^ 1, OK, false).await;
         assert!(dir.path().join(REVISION).join("a.wad").exists());
         assert!(db.mark_revision_complete(REVISION).await.expect("complete"));
 
         let dir = tempfile::tempdir().expect("tempdir");
-        let (db, _) = fetch(dir.path(), BODY_CRC ^ 1, true).await;
+        let (db, _) = fetch(dir.path(), "a.wad", BODY_CRC ^ 1, OK, true).await;
         assert!(!dir.path().join(REVISION).join("a.wad").exists());
         assert!(!db.mark_revision_complete(REVISION).await.expect("complete"));
     }
@@ -331,9 +322,35 @@ mod tests {
         std::fs::create_dir_all(dir.path().join(REVISION)).expect("revision dir");
         std::fs::write(dir.path().join(REVISION).join("a.wad"), BODY).expect("file");
 
-        let (db, requests) = fetch(dir.path(), BODY_CRC, false).await;
+        let (db, requests) = fetch(dir.path(), "a.wad", BODY_CRC, OK, false).await;
 
         assert_eq!(requests, 0);
         assert!(db.mark_revision_complete(REVISION).await.expect("complete"));
+    }
+
+    #[tokio::test]
+    async fn legacy_unsafe_row_skipped() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let save_dir = root.path().join("save");
+        std::fs::create_dir_all(&save_dir).expect("save dir");
+
+        let (_, requests) = fetch(&save_dir, "../../x", BODY_CRC, OK, false).await;
+
+        assert_eq!(requests, 0);
+        assert!(!root.path().join("x").exists());
+        assert!(!save_dir.join(REVISION).exists());
+        assert_eq!(downloaded(&save_dir, "../../x"), 0);
+    }
+
+    #[tokio::test]
+    async fn asset_4xx_not_marked_downloaded() {
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        let (db, requests) = fetch(dir.path(), "a.wad", BODY_CRC, "404 Not Found", false).await;
+
+        assert_eq!(requests, 1);
+        assert_eq!(downloaded(dir.path(), "a.wad"), 0);
+        assert!(!dir.path().join(REVISION).join("a.wad").exists());
+        assert!(!db.mark_revision_complete(REVISION).await.expect("complete"));
     }
 }

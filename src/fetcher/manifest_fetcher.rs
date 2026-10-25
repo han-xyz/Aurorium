@@ -97,12 +97,11 @@ impl Fetcher for ManifestFetcher {}
 #[cfg(test)]
 mod tests {
     use super::ManifestFetcher;
-    use crate::{errors::ManifestFetcherError, revision::Revision, wizard_patcher::WizardPatcher};
-    use std::path::Path;
-    use tokio::{
-        io::{AsyncReadExt, AsyncWriteExt},
-        net::TcpListener,
+    use crate::{
+        errors::ManifestFetcherError, fetcher::test_support::respond, revision::Revision,
+        wizard_patcher::WizardPatcher,
     };
+    use std::path::Path;
 
     const REVISION: &str = "V_r1.Wizard_1_0";
 
@@ -119,23 +118,8 @@ mod tests {
     }
 
     async fn serve_404_once() -> String {
-        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
-        let addr = listener.local_addr().expect("addr");
-        tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.expect("accept");
-            let mut request = [0u8; 1024];
-            let _ = socket.read(&mut request).await;
-            let body = "not found";
-            let response = format!(
-                "HTTP/1.1 404 Not Found\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
-            );
-            socket
-                .write_all(response.as_bytes())
-                .await
-                .expect("write response");
-        });
-        format!("http://{addr}/{REVISION}/Windows/LatestFileList.bin")
+        let server = respond("404 Not Found", b"not found").await;
+        format!("{}/{REVISION}/Windows/LatestFileList.bin", server.url)
     }
 
     #[tokio::test]

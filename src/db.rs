@@ -205,8 +205,8 @@ impl Database {
     }
 
     /// Resets `downloaded` for every asset of `revision` whose origin file is missing
-    /// under `save_dir/<origin_revision>/`, clears `complete` on `revision` if any is,
-    /// and returns those assets.
+    /// under `save_dir/<origin_revision>/`, clears `complete` on every revision that
+    /// uses one of those files, and returns those assets.
     pub async fn requeue_missing_files(
         &self,
         revision: &str,
@@ -236,18 +236,20 @@ impl Database {
                 let mut stmt_reset = tx.prepare(
                     "UPDATE assets SET downloaded = 0 WHERE revision = ?1 AND file_name = ?2",
                 )?;
+                let mut stmt_incomplete = tx.prepare(
+                    "UPDATE revisions SET complete = 0 WHERE revision_name IN (
+                        SELECT revision FROM assets WHERE origin_revision = ?1 AND file_name = ?2
+                    )",
+                )?;
                 for queued in &missing {
                     stmt_reset.execute(params![queued.origin_revision, queued.asset.file_name])?;
-                }
-                if !missing.is_empty() {
-                    tx.execute(
-                        "UPDATE revisions SET complete = 0 WHERE revision_name = ?1",
-                        params![revision],
-                    )?;
+                    stmt_incomplete
+                        .execute(params![queued.origin_revision, queued.asset.file_name])?;
                 }
 
                 drop(stmt_downloaded);
                 drop(stmt_reset);
+                drop(stmt_incomplete);
                 tx.commit().map_err(DbError::Transaction)?;
 
                 Ok(missing)
@@ -451,9 +453,13 @@ mod tests {
             .await
             .expect("insert R1");
         db.mark_downloaded("R1", "a.wad").await.expect("mark a");
-        assert!(db.mark_revision_complete("R1").await.expect("complete"));
+        assert!(db.mark_revision_complete("R1").await.expect("complete R1"));
+        db.insert_new_revision(revision("R2", 2), vec![asset("a.wad")])
+            .await
+            .expect("insert R2");
+        assert!(db.mark_revision_complete("R2").await.expect("complete R2"));
 
-        db.requeue_missing_files("R1", dir.path())
+        db.requeue_missing_files("R2", dir.path())
             .await
             .expect("requeue");
         assert!(db.latest_revision().await.expect("latest").is_none());

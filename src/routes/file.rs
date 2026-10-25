@@ -38,7 +38,7 @@ pub async fn file(
     ConnectionAddr(addr): ConnectionAddr,
     req: Request,
 ) -> Result<impl IntoResponse, RouteError> {
-    debug!("GET /{revision}/{file_path} from {addr}");
+    debug!(?revision, ?file_path, ?addr, "GET");
 
     if !is_safe_relative(&revision) || revision.contains('/') {
         return Err(RouteError::BadRequest(revision));

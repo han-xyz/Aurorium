@@ -125,36 +125,20 @@ pub trait Fetcher {
 #[cfg(test)]
 mod tests {
     use super::Fetcher;
-    use crate::errors::FetcherTraitError;
+    use crate::{
+        errors::FetcherTraitError,
+        fetcher::test_support::{BODY, BODY_CRC, respond},
+    };
     use reqwest::{Client, Response};
     use std::path::Path;
-    use tokio::{
-        io::{AsyncReadExt, AsyncWriteExt},
-        net::TcpListener,
-    };
-
-    const BODY: &[u8] = b"123456789";
-    const BODY_CRC: u32 = 0x2dfd_2d88;
 
     struct TestFetcher;
     impl Fetcher for TestFetcher {}
 
     async fn serve_body_once() -> Response {
-        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
-        let addr = listener.local_addr().expect("addr");
-        tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.expect("accept");
-            let mut request = [0u8; 1024];
-            let _ = socket.read(&mut request).await;
-            let head = format!(
-                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                BODY.len()
-            );
-            socket.write_all(head.as_bytes()).await.expect("write head");
-            socket.write_all(BODY).await.expect("write body");
-        });
+        let server = respond("200 OK", BODY).await;
         Client::new()
-            .get(format!("http://{addr}/a.wad"))
+            .get(format!("{}/a.wad", server.url))
             .send()
             .await
             .expect("response")
