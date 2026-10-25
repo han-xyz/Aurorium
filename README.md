@@ -37,7 +37,7 @@ Aurorium is the backbone of the Revive101 project: it fetches, tracks, and serve
 
 The rework, now on `main`, is a substantial rewrite of Aurorium, moving it from a CLI-driven downloader into a persistent service with its own file server and database:
 
-- **Built-in HTTP server (axum)**: Aurorium now has an additional route called `/latest` which is updated every $n$ hours.
+- **Built-in HTTP server (axum)**: Aurorium now has an additional route called `/latest`, which names the newest revision whose assets have all been downloaded and verified, and returns `404` until one exists.
 - **SQLite-backed asset tracking**: Revisions and assets are tracked in a proper database (via `rusqlite` + `async-sqlite`, with schema migrations), replacing the old flat-file bookkeeping.
 - **Smarter asset resolution**: Because assets are deduplicated and indexed by name/CRC/size, unchanged files aren't re-downloaded or re-stored between revisions, and requests are resolved to whichever revision actually owns the file.
 - **TOML configuration file**: Runtime settings now live in `config.toml` instead of CLI flags/environment variables, and a default one is generated for you on first run.
@@ -147,7 +147,9 @@ docker build -t aurorium .
 docker run -v aurorium-data:/app/data -p 127.0.0.1:12369:12369 aurorium
 ```
 
-The image bakes in `deploy/config.docker.toml`: the file server binds `0.0.0.0:12369`, assets and the database live under `/app/data` (the volume), and logs go to stdout. `verify_crc` stays `false`; flip it in that file once you have verified one asset (see [Integrity](#integrity)). The compose file in the host repo does not publish the port; other services reach it as `http://aurorium:12369`.
+The image bakes in `deploy/config.docker.toml`: the file server binds `0.0.0.0:12369`, assets and the database live under `/app/data` (the volume), and logs go to stdout. `verify_crc` stays `false`; flip it in that file and rebuild the image, or mount your own file at `/app/config.toml`, once you have verified one asset (see [Integrity](#integrity)). The compose file in the host repo does not publish the port; other services reach it as `http://aurorium:12369`.
+
+The runtime base image is pinned by digest to `debian:bookworm-slim` as published on 2026-10-25.
 
 ## HTTP API
 

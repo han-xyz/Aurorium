@@ -1,4 +1,3 @@
-# build stage
 FROM rust:1.99-bookworm AS build
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
@@ -8,8 +7,7 @@ RUN mkdir src && echo 'fn main() {}' > src/main.rs \
 COPY src ./src
 RUN cargo build --release --locked
 
-# runtime stage
-FROM debian:bookworm-slim
+FROM debian:bookworm-slim@sha256:7ff6ba31527b9e336162fa061746c366c4b2032f4d2cff2078bea43f78efe3f8
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
