@@ -48,7 +48,7 @@ impl ManifestFetcher {
             return Ok(());
         }
 
-        info!(path = %path.display(), "BIN manifest already cached, skipping download");
+        info!(path = ?path, "BIN manifest already cached, skipping download");
         Ok(())
     }
 
@@ -62,7 +62,7 @@ impl ManifestFetcher {
             let response = Self::fetch(&self.client, &list_file_url).await?;
             Self::write_to_file_streamed(&path, response, None, None, None).await?;
         } else {
-            info!(path = %path.display(), "XML manifest already cached, skipping download");
+            info!(path = ?path, "XML manifest already cached, skipping download");
         }
 
         let assets = match parse_file_list(&path) {
@@ -85,7 +85,7 @@ impl ManifestFetcher {
     async fn remove_cached(path: &Path) {
         match tokio::fs::remove_file(path).await {
             Err(e) if e.kind() != ErrorKind::NotFound => {
-                warn!(error = %e, path = %path.display(), "failed to delete cached manifest");
+                warn!(error = %e, path = ?path, "failed to delete cached manifest");
             }
             _ => {}
         }

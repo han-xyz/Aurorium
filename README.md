@@ -37,7 +37,7 @@ Aurorium is the backbone of the Revive101 project: it fetches, tracks, and serve
 
 The rework, now on `main`, is a substantial rewrite of Aurorium, moving it from a CLI-driven downloader into a persistent service with its own file server and database:
 
-- **Built-in HTTP server (axum)**: Aurorium now has an additional route called `/latest`, which names the newest revision whose assets have all been downloaded and verified, and returns `404` until one exists.
+- **Built-in HTTP server (axum)**: Aurorium now has an additional route called `/latest`, which names the newest revision whose assets have all been downloaded and size-checked (and CRC-checked when `verify_crc = true`), and returns `404` until one exists.
 - **SQLite-backed asset tracking**: Revisions and assets are tracked in a proper database (via `rusqlite` + `async-sqlite`, with schema migrations), replacing the old flat-file bookkeeping.
 - **Smarter asset resolution**: Because assets are deduplicated and indexed by name/CRC/size, unchanged files aren't re-downloaded or re-stored between revisions, and requests are resolved to whichever revision actually owns the file.
 - **TOML configuration file**: Runtime settings now live in `config.toml` instead of CLI flags/environment variables, and a default one is generated for you on first run.
