@@ -1,4 +1,4 @@
-use crate::{AppState, utils::ConnectionAddr};
+use crate::{AppState, errors::RouteError, utils::ConnectionAddr};
 use axum::{
     extract::State,
     response::{AppendHeaders, IntoResponse},
@@ -10,11 +10,11 @@ use tracing::debug;
 pub async fn get_revisions(
     State(state): State<AppState>,
     ConnectionAddr(addr): ConnectionAddr,
-) -> impl IntoResponse {
+) -> Result<impl IntoResponse, RouteError> {
     debug!("GET /revisions from {}", addr);
 
-    let revisions = state.db.list_revisions().await.unwrap_or(vec![]);
+    let revisions = state.db.list_revisions().await?;
     let headers = AppendHeaders([(header::CONTENT_TYPE, "application/json; charset=utf-8")]);
 
-    (headers, json!(revisions).to_string()).into_response()
+    Ok((headers, json!(revisions).to_string()))
 }

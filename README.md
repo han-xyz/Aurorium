@@ -34,7 +34,7 @@ Aurorium is the backbone of the Revive101 project: it fetches, tracks, and serve
 
 ## What's New in the Rework
 
-The `rework` branch is a substantial rewrite of Aurorium, moving it from a CLI-driven downloader into a persistent service with its own file server and database:
+The rework, now on `main`, is a substantial rewrite of Aurorium, moving it from a CLI-driven downloader into a persistent service with its own file server and database:
 
 - **Built-in HTTP server (axum)**: Aurorium now has an additional route called `/latest` which is updated every $n$ hours.
 - **SQLite-backed asset tracking**: Revisions and assets are tracked in a proper database (via `rusqlite` + `async-sqlite`, with schema migrations), replacing the old flat-file bookkeeping.
@@ -135,17 +135,17 @@ file_logging = false
 
 Once running, Aurorium exposes:
 
-| Method | Route                     | Description                                                        |
-| ------ | ------------------------- | ------------------------------------------------------------------ |
-| `GET`  | `/revisions`              | Lists all revisions currently tracked in the database (JSON)       |
-| `GET`  | `/latest`                 | Returns the name of the most recently tracked revision             |
-| `GET`  | `/{revision}/{file_path}` | Serves a specific asset, resolving it to the revision that owns it |
+| Method | Route                     | Description                                                                                                                            |
+| ------ | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET`  | `/revisions`              | Lists all revisions currently tracked in the database (JSON); `500` on a database error                                                |
+| `GET`  | `/latest`                 | Returns the name of the newest complete revision as `text/plain`; `404` until a revision has all its assets, `500` on a database error |
+| `GET`  | `/{revision}/{file_path}` | Serves a specific asset, resolving it to the revision that owns it                                                                     |
 
 `LatestFileList.xml`/`.bin` are always served from the requested revision directly; any other file is resolved to whichever revision first introduced it, so unchanged assets aren't duplicated on disk.
 
 ## Migrating from v3.x
 
-The rework branch changes enough that a v3.x setup can't be dropped in as-is:
+The rework changes enough that a v3.x setup can't be dropped in as-is:
 
 - Configuration moved from CLI flags/env vars to `config.toml` — recreate your settings there (see table above).
 - A SQLite database (`aurorium.db` by default) now tracks revisions/assets; it's created and migrated automatically on first run, but existing on-disk data from v3.x isn't imported.
@@ -157,7 +157,7 @@ If you're upgrading a running instance, we recommend starting from a fresh `save
 
 We welcome all contributions! Whether you're a Rust wizard or a curious apprentice, your input helps!
 
-- 🍴 Fork the repo, make your changes on top of `rework`, and submit a pull request.
+- 🍴 Fork the repo, make your changes on top of `main`, and submit a pull request.
 - 🐛 Report bugs or suggest features via [issues](https://github.com/Revive101/Aurorium/issues).
 
 > [!NOTE]

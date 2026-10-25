@@ -9,7 +9,7 @@ use std::{
     time::Duration,
 };
 use tokio::fs::try_exists;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 /// This struct is responsible for fetching the `LatestFileList.bin` and `LatestFileList.xml` from their servers.
 pub struct ManifestFetcher {
@@ -44,7 +44,7 @@ impl ManifestFetcher {
         if !file_exists {
             info!("Fetching LatestFileList.bin...");
             let response = Self::fetch(&self.client, &self.wizard_patcher.list_file_url).await?;
-            Self::write_to_file_streamed(&path, response, None).await?;
+            Self::write_to_file_streamed(&path, response, None, None, None).await?;
             return Ok(());
         }
 
@@ -60,7 +60,7 @@ impl ManifestFetcher {
         if !file_exists {
             info!("Fetching LatestFileList.xml...");
             let response = Self::fetch(&self.client, &list_file_url).await?;
-            Self::write_to_file_streamed(&path, response, None).await?;
+            Self::write_to_file_streamed(&path, response, None, None, None).await?;
         } else {
             info!(path = %path.display(), "XML manifest already cached, skipping download");
         }
@@ -68,25 +68,26 @@ impl ManifestFetcher {
         let assets = match parse_file_list(&path) {
             Ok(assets) => assets,
             Err(e) => {
-                Self::remove_cached(&path).await?;
+                Self::remove_cached(&path).await;
                 return Err(e);
             }
         };
         debug!("Parsed {} entries from LatestFileList.xml", assets.len());
 
         if assets.is_empty() {
-            Self::remove_cached(&path).await?;
+            Self::remove_cached(&path).await;
             return Err(ManifestFetcherError::EmptyAssetList.into());
         }
 
         Ok(assets)
     }
 
-    async fn remove_cached(path: &Path) -> miette::Result<()> {
+    async fn remove_cached(path: &Path) {
         match tokio::fs::remove_file(path).await {
-            Ok(()) => Ok(()),
-            Err(e) if e.kind() == ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(ManifestFetcherError::Io(e).into()),
+            Err(e) if e.kind() != ErrorKind::NotFound => {
+                warn!(error = %e, path = %path.display(), "failed to delete cached manifest");
+            }
+            _ => {}
         }
     }
 }

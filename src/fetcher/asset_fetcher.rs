@@ -1,5 +1,5 @@
 use crate::{
-    errors::AssetFetcherError, fetcher::fetcher::Fetcher, revision::Asset,
+    db::Database, errors::AssetFetcherError, fetcher::fetcher::Fetcher, revision::Asset,
     wizard_patcher::WizardPatcher,
 };
 use futures_util::{StreamExt, stream};
@@ -31,6 +31,7 @@ pub struct AssetFetcher<'a> {
     wizard_patcher: WizardPatcher,
     save_directory: PathBuf,
     assets: Vec<Asset>,
+    db: Database,
 }
 
 impl<'a> AssetFetcher<'a> {
@@ -39,6 +40,7 @@ impl<'a> AssetFetcher<'a> {
         concurrent_downloads: &'a NonZeroUsize,
         save_directory: P,
         assets: Vec<Asset>,
+        db: Database,
     ) -> miette::Result<Self>
     where
         P: AsRef<Path>,
@@ -53,10 +55,11 @@ impl<'a> AssetFetcher<'a> {
 
         Ok(AssetFetcher {
             client,
-            save_directory: save_directory.as_ref().join(&wizard_patcher.revision.name),
+            save_directory: save_directory.as_ref().to_path_buf(),
             wizard_patcher,
             concurrent_downloads,
             assets,
+            db,
         })
     }
 
@@ -85,21 +88,30 @@ impl<'a> AssetFetcher<'a> {
             let client = self.client.clone();
             let url_prefix = self.wizard_patcher.url_prefix.clone();
             let save_dir = self.save_directory.clone();
+            let db = self.db.clone();
+            let revision = self.wizard_patcher.revision.name.clone();
 
             let multi_progress = multi_progress.clone();
             let main_progress = main_progress.clone();
 
             async move {
                 let url = format!("{url_prefix}/{}", file.file_name);
-                let save_path = save_dir.join(&file.file_name);
+                let origin_revision = match db.get_revision_for_asset(revision, file.file_name.clone()).await {
+                    Ok(Some(origin)) => origin,
+                    Ok(None) => {
+                        warn!(file = %file.file_name, "asset has no database row, skipping");
+                        main_progress.inc(1);
+                        return;
+                    }
+                    Err(e) => {
+                        warn!(error = %e, file = %file.file_name, "failed to look up asset origin");
+                        main_progress.inc(1);
+                        return;
+                    }
+                };
+                let save_path = save_dir.join(&origin_revision).join(&file.file_name);
 
                 trace!(url = %url, file = %file.file_name, "starting download");
-
-                if save_path.exists() {
-                    trace!(file = %file.file_name, "already downloaded, skipping");
-                    main_progress.inc(1);
-                    return;
-                }
 
                 // Download the file and write it to disk
                 match client.get(&url).send().await {
@@ -116,9 +128,12 @@ impl<'a> AssetFetcher<'a> {
                         file_progress.set_message(short_filename.to_string());
                         file_progress.set_length(res.content_length().unwrap_or(file.size.into()));
 
-                        match Self::write_to_file_streamed(&save_path, res, Some(&file_progress)).await {
+                        match Self::write_to_file_streamed(&save_path, res, Some(&file_progress), Some(file.size.into()), Some(file.crc)).await {
                             Ok(()) => {
                                 file_progress.finish_with_message("Done");
+                                if let Err(e) = db.mark_downloaded(&origin_revision, &file.file_name).await {
+                                    warn!(error = %e, file = %file.file_name, "failed to mark asset as downloaded");
+                                }
                             }
                             Err(e) => {
                                 warn!(error = %e, file = %file.file_name, "failed to write file to disk");

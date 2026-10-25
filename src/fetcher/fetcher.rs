@@ -18,6 +18,8 @@ pub trait Fetcher {
     }
 
     /// Streams an HTTP response to disk, optionally driving a progress bar.
+    /// When `expected_size` or `expected_crc` (CRC-32) is given and the body does not match,
+    /// the partial file is deleted and an error is returned.
     ///
     /// # Panics
     /// This function will panic if any of the following conditions are met:
@@ -32,6 +34,8 @@ pub trait Fetcher {
         path: P,
         mut response: reqwest::Response,
         progress: Option<&ProgressBar>,
+        expected_size: Option<u64>,
+        expected_crc: Option<u32>,
     ) -> miette::Result<()>
     where
         P: AsRef<Path>,
@@ -53,6 +57,8 @@ pub trait Fetcher {
 
         // Stream response to file in chunks (to avoid loading the entire file into memory)
         let result: miette::Result<()> = async {
+            let mut size = 0u64;
+            let mut hasher = crc32fast::Hasher::new();
             while let Some(chunk) = response
                 .chunk()
                 .await
@@ -62,6 +68,8 @@ pub trait Fetcher {
                     .write_all(&chunk)
                     .await
                     .map_err(FetcherTraitError::Io)?;
+                size += chunk.len() as u64;
+                hasher.update(&chunk);
 
                 if let Some(pb) = progress {
                     pb.inc(chunk.len() as u64);
@@ -69,6 +77,22 @@ pub trait Fetcher {
             }
 
             writer.flush().await.map_err(FetcherTraitError::Io)?;
+
+            if let Some(expected) = expected_size.filter(|&expected| expected != size) {
+                return Err(FetcherTraitError::SizeMismatch {
+                    expected,
+                    actual: size,
+                }
+                .into());
+            }
+            let crc = hasher.finalize();
+            if let Some(expected) = expected_crc.filter(|&expected| expected != crc) {
+                return Err(FetcherTraitError::CrcMismatch {
+                    expected,
+                    actual: crc,
+                }
+                .into());
+            }
             Ok(())
         }
         .await;
@@ -91,5 +115,94 @@ pub trait Fetcher {
         let mut part_os = path.as_os_str().to_owned();
         part_os.push(".part");
         PathBuf::from(part_os)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Fetcher;
+    use crate::errors::FetcherTraitError;
+    use reqwest::{Client, Response};
+    use std::path::Path;
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
+
+    const BODY: &[u8] = b"wizard101 asset bytes";
+
+    struct TestFetcher;
+    impl Fetcher for TestFetcher {}
+
+    async fn serve_body_once() -> Response {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept");
+            let mut request = [0u8; 1024];
+            let _ = socket.read(&mut request).await;
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                BODY.len()
+            );
+            socket.write_all(head.as_bytes()).await.expect("write head");
+            socket.write_all(BODY).await.expect("write body");
+        });
+        Client::new()
+            .get(format!("http://{addr}/a.wad"))
+            .send()
+            .await
+            .expect("response")
+    }
+
+    fn assert_nothing_written(path: &Path) {
+        assert!(!path.exists());
+        assert!(!TestFetcher::part_path(path).exists());
+    }
+
+    #[tokio::test]
+    async fn size_mismatch_deletes_part() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("a.wad");
+        let crc = crc32fast::hash(BODY);
+
+        let err = TestFetcher::write_to_file_streamed(
+            &path,
+            serve_body_once().await,
+            None,
+            Some(BODY.len() as u64 + 1),
+            Some(crc),
+        )
+        .await
+        .expect_err("size mismatch");
+
+        assert!(matches!(
+            err.downcast_ref::<FetcherTraitError>(),
+            Some(FetcherTraitError::SizeMismatch { .. })
+        ));
+        assert_nothing_written(&path);
+    }
+
+    #[tokio::test]
+    async fn crc_mismatch_deletes_part() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("a.wad");
+        let crc = crc32fast::hash(BODY);
+
+        let err = TestFetcher::write_to_file_streamed(
+            &path,
+            serve_body_once().await,
+            None,
+            Some(BODY.len() as u64),
+            Some(crc ^ 1),
+        )
+        .await
+        .expect_err("crc mismatch");
+
+        assert!(matches!(
+            err.downcast_ref::<FetcherTraitError>(),
+            Some(FetcherTraitError::CrcMismatch { .. })
+        ));
+        assert_nothing_written(&path);
     }
 }

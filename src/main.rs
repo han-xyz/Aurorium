@@ -7,7 +7,11 @@ use crate::{
 };
 use axum::{Router, routing::get};
 use miette::{IntoDiagnostic, Result};
-use std::{net::SocketAddr, path::PathBuf, time::Duration};
+use std::{
+    net::SocketAddr,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 use tokio::{net::TcpListener, time::sleep};
 use tracing::{error, info, level_filters::LevelFilter, warn};
 use tracing_appender::non_blocking::WorkerGuard;
@@ -159,7 +163,12 @@ async fn revision_checker(config: AppConfig, db: Database) -> miette::Result<()>
                 .insert_new_revision(wizard_patcher.revision.clone(), new_assets)
                 .await
             {
-                Ok(assets) => {
+                Ok(mut assets) => {
+                    let revision = wizard_patcher.revision.name.clone();
+                    assets.extend(
+                        db.requeue_missing_files(&revision, Path::new(save_directory))
+                            .await?,
+                    );
                     info!(
                         "Revision {} has {} updated or new assets. Starting/Continuing download...",
                         &wizard_patcher.revision,
@@ -171,10 +180,17 @@ async fn revision_checker(config: AppConfig, db: Database) -> miette::Result<()>
                         concurrent_downloads,
                         save_directory,
                         assets,
+                        db.clone(),
                     )
                     .unwrap();
 
                     asset_fetched.fetch_assets().await?;
+
+                    if db.mark_revision_complete(&revision).await? {
+                        info!("Revision {revision} is complete");
+                    } else {
+                        warn!("Revision {revision} still has assets to download");
+                    }
                 }
                 Err(e) => {
                     warn!(error = %e, "Failed to insert new revision into database");

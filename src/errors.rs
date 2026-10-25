@@ -184,6 +184,14 @@ pub enum FetcherTraitError {
     #[error("failed to finalize downloaded file")]
     #[diagnostic(code(asset_fetcher::rename))]
     Rename(#[source] std::io::Error),
+
+    #[error("downloaded size {actual} does not match the manifest size {expected}")]
+    #[diagnostic(code(asset_fetcher::size_mismatch))]
+    SizeMismatch { expected: u64, actual: u64 },
+
+    #[error("downloaded CRC {actual:#010x} does not match the manifest CRC {expected:#010x}")]
+    #[diagnostic(code(asset_fetcher::crc_mismatch))]
+    CrcMismatch { expected: u32, actual: u32 },
 }
 
 // config.rs
