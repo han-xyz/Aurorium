@@ -19,6 +19,7 @@ use tracing_subscriber::{
     EnvFilter, Layer, fmt::time::ChronoLocal, layer::SubscriberExt, util::SubscriberInitExt,
 };
 
+mod crc;
 pub mod db;
 pub mod errors;
 pub mod utils;

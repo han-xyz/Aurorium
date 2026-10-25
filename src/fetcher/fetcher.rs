@@ -1,4 +1,4 @@
-use crate::errors::FetcherTraitError;
+use crate::{crc::Crc32, errors::FetcherTraitError};
 use indicatif::ProgressBar;
 use reqwest::{Client, Response};
 use std::path::{Path, PathBuf};
@@ -18,8 +18,8 @@ pub trait Fetcher {
     }
 
     /// Streams an HTTP response to disk, optionally driving a progress bar.
-    /// When `expected_size` or `expected_crc` (CRC-32) is given and the body does not match,
-    /// the partial file is deleted and an error is returned.
+    /// When `expected_size` or `expected_crc` (KingsIsle CRC-32, see [`Crc32`]) is given
+    /// and the body does not match, the partial file is deleted and an error is returned.
     ///
     /// # Panics
     /// This function will panic if any of the following conditions are met:
@@ -58,7 +58,7 @@ pub trait Fetcher {
         // Stream response to file in chunks (to avoid loading the entire file into memory)
         let result: miette::Result<()> = async {
             let mut size = 0u64;
-            let mut hasher = crc32fast::Hasher::new();
+            let mut crc = Crc32::default();
             while let Some(chunk) = response
                 .chunk()
                 .await
@@ -69,7 +69,7 @@ pub trait Fetcher {
                     .await
                     .map_err(FetcherTraitError::Io)?;
                 size += chunk.len() as u64;
-                hasher.update(&chunk);
+                crc.update(&chunk);
 
                 if let Some(pb) = progress {
                     pb.inc(chunk.len() as u64);
@@ -85,7 +85,7 @@ pub trait Fetcher {
                 }
                 .into());
             }
-            let crc = hasher.finalize();
+            let crc = crc.value();
             if let Some(expected) = expected_crc.filter(|&expected| expected != crc) {
                 return Err(FetcherTraitError::CrcMismatch {
                     expected,
@@ -129,7 +129,8 @@ mod tests {
         net::TcpListener,
     };
 
-    const BODY: &[u8] = b"wizard101 asset bytes";
+    const BODY: &[u8] = b"123456789";
+    const BODY_CRC: u32 = 0x2dfd_2d88;
 
     struct TestFetcher;
     impl Fetcher for TestFetcher {}
@@ -164,14 +165,13 @@ mod tests {
     async fn size_mismatch_deletes_part() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("a.wad");
-        let crc = crc32fast::hash(BODY);
 
         let err = TestFetcher::write_to_file_streamed(
             &path,
             serve_body_once().await,
             None,
             Some(BODY.len() as u64 + 1),
-            Some(crc),
+            Some(BODY_CRC),
         )
         .await
         .expect_err("size mismatch");
@@ -187,14 +187,13 @@ mod tests {
     async fn crc_mismatch_deletes_part() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("a.wad");
-        let crc = crc32fast::hash(BODY);
 
         let err = TestFetcher::write_to_file_streamed(
             &path,
             serve_body_once().await,
             None,
             Some(BODY.len() as u64),
-            Some(crc ^ 1),
+            Some(BODY_CRC ^ 1),
         )
         .await
         .expect_err("crc mismatch");
