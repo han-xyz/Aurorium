@@ -19,6 +19,8 @@ pub struct FetcherConfig {
     pub fetch_interval: u64,
     #[serde(default)]
     pub verify_crc: bool,
+    #[serde(default)]
+    pub allowed_hosts: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -89,6 +91,7 @@ impl Default for AppConfig {
                 fetch_interval: 60 * 60 * 8,
                 save_directory: PathBuf::from("data"),
                 verify_crc: false,
+                allowed_hosts: Vec::new(),
             },
             database: DBConfig {
                 path: "aurorium.db".to_string(),

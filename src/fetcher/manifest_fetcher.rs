@@ -23,11 +23,15 @@ pub struct ManifestFetcher {
 }
 
 impl ManifestFetcher {
-    pub fn new<P>(wizard_patcher: WizardPatcher, save_directory: P) -> miette::Result<Self>
+    pub fn new<P>(
+        wizard_patcher: WizardPatcher,
+        save_directory: P,
+        allowed_hosts: &[String],
+    ) -> miette::Result<Self>
     where
         P: AsRef<Path>,
     {
-        let url_policy = UrlPolicy::new(&wizard_patcher);
+        let url_policy = UrlPolicy::new(&wizard_patcher, allowed_hosts)?;
         let client = Client::builder()
             .redirect(url_policy.redirect())
             .user_agent("KingsIsle Patcher")
@@ -118,15 +122,15 @@ mod tests {
 
     fn manifest_fetcher(list_file_url: String, save_directory: &Path) -> ManifestFetcher {
         let wizard_patcher = WizardPatcher {
+            url_prefix: list_file_url.clone(),
             list_file_url,
-            url_prefix: String::new(),
             revision: Revision {
                 name: REVISION.to_string(),
                 number: 1,
             },
-            patch_host: "patch.invalid".to_string(),
         };
-        ManifestFetcher::new(wizard_patcher, save_directory).expect("manifest fetcher")
+        ManifestFetcher::new(wizard_patcher, save_directory, &["127.0.0.1".to_string()])
+            .expect("manifest fetcher")
     }
 
     async fn serve_404_once() -> String {

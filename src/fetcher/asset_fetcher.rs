@@ -50,11 +50,12 @@ impl<'a> AssetFetcher<'a> {
         assets: Vec<QueuedAsset>,
         db: Database,
         verify_crc: bool,
+        allowed_hosts: &[String],
     ) -> miette::Result<Self>
     where
         P: AsRef<Path>,
     {
-        let url_policy = UrlPolicy::new(&wizard_patcher);
+        let url_policy = UrlPolicy::new(&wizard_patcher, allowed_hosts)?;
         let client = Client::builder()
             .redirect(url_policy.redirect())
             .user_agent("KingsIsle Patcher")
@@ -283,7 +284,6 @@ mod tests {
             list_file_url: format!("{}/LatestFileList.bin", server.url),
             url_prefix: server.url.clone(),
             revision,
-            patch_host: "patch.invalid".to_string(),
         };
 
         AssetFetcher::new(
@@ -293,6 +293,7 @@ mod tests {
             queued,
             db.clone(),
             verify_crc,
+            &["127.0.0.1".to_string()],
         )
         .expect("asset fetcher")
         .fetch_assets()

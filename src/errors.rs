@@ -172,6 +172,13 @@ pub enum FetcherTraitError {
     #[diagnostic(code(asset_fetcher::url_refused))]
     UrlRefused(String),
 
+    #[error("Patch server named host {0}, which is not in the allow-list")]
+    #[diagnostic(
+        code(asset_fetcher::host_not_allowed),
+        help("Add the host to `allowed_hosts` in the `[fetcher]` section of config.toml.")
+    )]
+    HostNotAllowed(String),
+
     #[error("File system I/O error")]
     #[diagnostic(code(asset_fetcher::io))]
     Io(#[source] std::io::Error),

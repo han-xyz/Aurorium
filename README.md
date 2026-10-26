@@ -121,18 +121,19 @@ level = "info"
 file_logging = false
 ```
 
-| Section              | Field                  | Description                                                                                   | Default                  |
-| -------------------- | ---------------------- | --------------------------------------------------------------------------------------------- | ------------------------ |
-| `[server]`           | `endpoint`             | Address the file server binds to                                                              | `127.0.0.1:12369`        |
-| `[fetcher]`          | `concurrent_downloads` | Number of assets to download in parallel                                                      | `2`                      |
-| `[fetcher]`          | `save_directory`       | Where fetched assets are stored; a relative path is resolved against the directory of `config.toml` | `data`                   |
-| `[fetcher]`          | `fetch_interval`       | Seconds between revision checks                                                               | `28800` (8 hours)        |
-| `[fetcher]`          | `verify_crc`           | Reject a downloaded asset whose CRC does not match the manifest (see [Integrity](#integrity)) | `false`                  |
-| `[patch]`            | `host`                 | Patch server host to poll for revisions                                                       | `patch.us.wizard101.com` |
-| `[patch]`            | `port`                 | Patch server port                                                                             | `12500`                  |
-| `[database]`         | `path`                 | Path to the SQLite database file                                                              | `aurorium.db`            |
-| `[debug]` (optional) | `level`                | Log level (`trace`, `debug`, `info`, `warn`, `error`); `info` when the section or field is absent | `info`                   |
-| `[debug]` (optional) | `file_logging`         | Whether to also write logs to `logs/`                                                         | `false`                  |
+| Section              | Field                  | Description                                                                                                                                                                               | Default                  |
+| -------------------- | ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------ |
+| `[server]`           | `endpoint`             | Address the file server binds to                                                                                                                                                          | `127.0.0.1:12369`        |
+| `[fetcher]`          | `concurrent_downloads` | Number of assets to download in parallel                                                                                                                                                  | `2`                      |
+| `[fetcher]`          | `save_directory`       | Where fetched assets are stored; a relative path is resolved against the directory of `config.toml`                                                                                       | `data`                   |
+| `[fetcher]`          | `fetch_interval`       | Seconds between revision checks                                                                                                                                                           | `28800` (8 hours)        |
+| `[fetcher]`          | `verify_crc`           | Reject a downloaded asset whose CRC does not match the manifest (see [Integrity](#integrity))                                                                                             | `false`                  |
+| `[fetcher]`          | `allowed_hosts`        | Extra hosts the patch server may name for manifests and assets, besides `[patch] host`; a reply naming any other host is refused. Add the CDN host here if it differs from the patch host | none (patch host only)   |
+| `[patch]`            | `host`                 | Patch server host to poll for revisions                                                                                                                                                   | `patch.us.wizard101.com` |
+| `[patch]`            | `port`                 | Patch server port                                                                                                                                                                         | `12500`                  |
+| `[database]`         | `path`                 | Path to the SQLite database file                                                                                                                                                          | `aurorium.db`            |
+| `[debug]` (optional) | `level`                | Log level (`trace`, `debug`, `info`, `warn`, `error`); `info` when the section or field is absent                                                                                         | `info`                   |
+| `[debug]` (optional) | `file_logging`         | Whether to also write logs to `logs/`                                                                                                                                                     | `false`                  |
 
 ### Integrity
 

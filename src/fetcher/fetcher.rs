@@ -10,8 +10,8 @@ use tracing::warn;
 
 const MAX_REDIRECTS: usize = 3;
 
-/// Outbound allow-list: the configured patch host plus the hosts the patch server named,
-/// all under the scheme of the manifest URL.
+/// Outbound allow-list from configuration; the patch server's reply must name only listed hosts.
+/// Fetches and redirects keep the scheme of the manifest URL, so https is never downgraded.
 #[derive(Debug, Clone)]
 pub struct UrlPolicy {
     scheme: String,
@@ -19,23 +19,29 @@ pub struct UrlPolicy {
 }
 
 impl UrlPolicy {
-    pub fn new(wizard_patcher: &WizardPatcher) -> Self {
-        let list_url = Url::parse(&wizard_patcher.list_file_url).ok();
-        let prefix_url = Url::parse(&wizard_patcher.url_prefix).ok();
-        let hosts = [list_url.as_ref(), prefix_url.as_ref()]
-            .into_iter()
-            .flatten()
-            .filter_map(|url| url.host_str())
-            .chain([wizard_patcher.patch_host.as_str()])
-            .map(str::to_ascii_lowercase)
-            .collect();
-
-        Self {
-            scheme: list_url
+    pub fn new(
+        wizard_patcher: &WizardPatcher,
+        allowed_hosts: &[String],
+    ) -> Result<Self, FetcherTraitError> {
+        let policy = Self {
+            scheme: Url::parse(&wizard_patcher.list_file_url)
                 .map(|url| url.scheme().to_string())
                 .unwrap_or_default(),
-            hosts,
+            hosts: allowed_hosts
+                .iter()
+                .map(|h| h.to_ascii_lowercase())
+                .collect(),
+        };
+        for named in [&wizard_patcher.list_file_url, &wizard_patcher.url_prefix] {
+            let url =
+                Url::parse(named).map_err(|_| FetcherTraitError::UrlRefused(named.clone()))?;
+            let host = url.host_str().unwrap_or_default();
+            if !policy.has_host(host) {
+                warn!(host, "patch server named a host outside the allow-list");
+                return Err(FetcherTraitError::HostNotAllowed(host.to_string()));
+            }
         }
+        Ok(policy)
     }
 
     pub fn check(&self, url: &str) -> Result<(), FetcherTraitError> {
@@ -67,12 +73,13 @@ impl UrlPolicy {
     }
 
     fn allows(&self, url: &Url) -> bool {
-        url.scheme() == self.scheme
-            && url.host_str().is_some_and(|host| {
-                self.hosts
-                    .iter()
-                    .any(|allowed| allowed.eq_ignore_ascii_case(host))
-            })
+        url.scheme() == self.scheme && url.host_str().is_some_and(|host| self.has_host(host))
+    }
+
+    fn has_host(&self, host: &str) -> bool {
+        self.hosts
+            .iter()
+            .any(|allowed| allowed.eq_ignore_ascii_case(host))
     }
 }
 
@@ -203,29 +210,58 @@ mod tests {
     use reqwest::{Client, Response};
     use std::path::Path;
 
-    fn policy() -> UrlPolicy {
-        UrlPolicy::new(&WizardPatcher {
-            list_file_url:
-                "http://versions.example/WizPatcher/V_r1.Wizard_1_0/Windows/LatestFileList.bin"
-                    .to_string(),
-            url_prefix: "http://assets.example/WizPatcher/V_r1.Wizard_1_0".to_string(),
+    fn patcher(list_host: &str, prefix_host: &str, scheme: &str) -> WizardPatcher {
+        WizardPatcher {
+            list_file_url: format!(
+                "{scheme}://{list_host}/WizPatcher/V_r1.Wizard_1_0/Windows/LatestFileList.bin"
+            ),
+            url_prefix: format!("{scheme}://{prefix_host}/WizPatcher/V_r1.Wizard_1_0"),
             revision: Revision {
                 name: "V_r1.Wizard_1_0".to_string(),
                 number: 1,
             },
-            patch_host: "patch.example".to_string(),
-        })
+        }
+    }
+
+    fn allowed() -> Vec<String> {
+        ["patch.example", "versions.example"]
+            .map(String::from)
+            .to_vec()
     }
 
     #[test]
-    fn url_policy_allows_named_hosts_only() {
-        let policy = policy();
+    fn reply_naming_off_list_host_refused() {
+        let err = UrlPolicy::new(
+            &patcher("versions.example", "evil.example", "http"),
+            &allowed(),
+        )
+        .expect_err("off-list prefix");
 
-        assert!(policy.check("http://patch.example/a.wad").is_ok());
-        assert!(policy.check("http://versions.example/a.bin").is_ok());
-        assert!(policy.check("http://assets.example/a.wad").is_ok());
-        assert!(policy.check("http://evil.example/a.wad").is_err());
-        assert!(policy.check("https://assets.example/a.wad").is_err());
+        assert!(matches!(err, FetcherTraitError::HostNotAllowed(host) if host == "evil.example"));
+    }
+
+    #[test]
+    fn reply_naming_listed_hosts_accepted() {
+        assert!(
+            UrlPolicy::new(
+                &patcher("versions.example", "patch.example", "https"),
+                &allowed()
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn https_manifest_refuses_http_target() {
+        let policy = UrlPolicy::new(
+            &patcher("versions.example", "patch.example", "https"),
+            &allowed(),
+        )
+        .expect("policy");
+
+        assert!(policy.check("https://patch.example/a.wad").is_ok());
+        assert!(policy.check("http://patch.example/a.wad").is_err());
+        assert!(policy.check("https://evil.example/a.wad").is_err());
     }
 
     struct TestFetcher;

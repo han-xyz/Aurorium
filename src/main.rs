@@ -144,8 +144,12 @@ async fn revision_checker(config: AppConfig, db: Database) -> miette::Result<()>
         concurrent_downloads,
         save_directory,
         verify_crc,
+        allowed_hosts,
         ..
     } = &config.fetcher;
+    let allowed_hosts: Vec<String> = std::iter::once(host.clone())
+        .chain(allowed_hosts.iter().cloned())
+        .collect();
 
     loop {
         info!("Checking for a new revision @ {host}:{port}");
@@ -153,7 +157,8 @@ async fn revision_checker(config: AppConfig, db: Database) -> miette::Result<()>
         let result = async {
             let wizard_patcher = WizardPatcher::check_revision(host, port).await?;
 
-            let manifest_fetcher = ManifestFetcher::new(wizard_patcher.clone(), save_directory)?;
+            let manifest_fetcher =
+                ManifestFetcher::new(wizard_patcher.clone(), save_directory, &allowed_hosts)?;
             manifest_fetcher.fetch_bin_manifest().await?;
             let new_assets = manifest_fetcher.fetch_xml_manifest().await?;
 
@@ -180,6 +185,7 @@ async fn revision_checker(config: AppConfig, db: Database) -> miette::Result<()>
                         assets,
                         db.clone(),
                         *verify_crc,
+                        &allowed_hosts,
                     )
                     .unwrap();
 
