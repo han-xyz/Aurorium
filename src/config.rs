@@ -19,8 +19,12 @@ pub struct FetcherConfig {
     pub fetch_interval: u64,
     #[serde(default)]
     pub verify_crc: bool,
-    #[serde(default)]
+    #[serde(default = "default_allowed_hosts")]
     pub allowed_hosts: Vec<String>,
+}
+
+fn default_allowed_hosts() -> Vec<String> {
+    vec!["versionak.us.wizard101.com".to_string()]
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -91,7 +95,7 @@ impl Default for AppConfig {
                 fetch_interval: 60 * 60 * 8,
                 save_directory: PathBuf::from("data"),
                 verify_crc: false,
-                allowed_hosts: Vec::new(),
+                allowed_hosts: default_allowed_hosts(),
             },
             database: DBConfig {
                 path: "aurorium.db".to_string(),

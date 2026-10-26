@@ -6,6 +6,7 @@ concurrent_downloads = 2
 save_directory = "data"
 fetch_interval = 28800
 verify_crc = false
+allowed_hosts = ["versionak.us.wizard101.com"]
 
 [patch]
 host = "patch.us.wizard101.com"
