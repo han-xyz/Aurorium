@@ -131,7 +131,7 @@ file_logging = false
 | `[patch]`            | `host`                 | Patch server host to poll for revisions                                                       | `patch.us.wizard101.com` |
 | `[patch]`            | `port`                 | Patch server port                                                                             | `12500`                  |
 | `[database]`         | `path`                 | Path to the SQLite database file                                                              | `aurorium.db`            |
-| `[debug]` (optional) | `level`                | Log level (`trace`, `debug`, `info`, `warn`, `error`)                                         | `info`                   |
+| `[debug]` (optional) | `level`                | Log level (`trace`, `debug`, `info`, `warn`, `error`); `info` when the section or field is absent | `info`                   |
 | `[debug]` (optional) | `file_logging`         | Whether to also write logs to `logs/`                                                         | `false`                  |
 
 ### Integrity
