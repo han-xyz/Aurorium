@@ -1,6 +1,9 @@
 use crate::{
-    errors::ManifestFetcherError, fetcher::fetcher::Fetcher, revision::Asset,
-    wizard_patcher::WizardPatcher, xml_parser::parse_file_list,
+    errors::ManifestFetcherError,
+    fetcher::fetcher::{Fetcher, UrlPolicy},
+    revision::Asset,
+    wizard_patcher::WizardPatcher,
+    xml_parser::parse_file_list,
 };
 use reqwest::Client;
 use std::{
@@ -15,6 +18,7 @@ use tracing::{debug, info, warn};
 pub struct ManifestFetcher {
     client: Client,
     wizard_patcher: WizardPatcher,
+    url_policy: UrlPolicy,
     save_directory: PathBuf,
 }
 
@@ -23,7 +27,9 @@ impl ManifestFetcher {
     where
         P: AsRef<Path>,
     {
+        let url_policy = UrlPolicy::new(&wizard_patcher);
         let client = Client::builder()
+            .redirect(url_policy.redirect())
             .user_agent("KingsIsle Patcher")
             .tcp_keepalive(Duration::from_mins(1))
             .timeout(Duration::from_mins(2))
@@ -33,6 +39,7 @@ impl ManifestFetcher {
         Ok(Self {
             client,
             wizard_patcher: wizard_patcher.clone(),
+            url_policy,
             save_directory: save_directory.as_ref().join(wizard_patcher.revision.name),
         })
     }
@@ -43,6 +50,7 @@ impl ManifestFetcher {
 
         if !file_exists {
             info!("Fetching LatestFileList.bin...");
+            self.url_policy.check(&self.wizard_patcher.list_file_url)?;
             let response = Self::fetch(&self.client, &self.wizard_patcher.list_file_url).await?;
             Self::write_to_file_streamed(&path, response, None, None, None).await?;
             return Ok(());
@@ -59,6 +67,7 @@ impl ManifestFetcher {
 
         if !file_exists {
             info!("Fetching LatestFileList.xml...");
+            self.url_policy.check(&list_file_url)?;
             let response = Self::fetch(&self.client, &list_file_url).await?;
             Self::write_to_file_streamed(&path, response, None, None, None).await?;
         } else {
@@ -98,7 +107,9 @@ impl Fetcher for ManifestFetcher {}
 mod tests {
     use super::ManifestFetcher;
     use crate::{
-        errors::ManifestFetcherError, fetcher::test_support::respond, revision::Revision,
+        errors::ManifestFetcherError,
+        fetcher::test_support::{BODY, respond, respond_with},
+        revision::Revision,
         wizard_patcher::WizardPatcher,
     };
     use std::path::Path;
@@ -113,6 +124,7 @@ mod tests {
                 name: REVISION.to_string(),
                 number: 1,
             },
+            patch_host: "patch.invalid".to_string(),
         };
         ManifestFetcher::new(wizard_patcher, save_directory).expect("manifest fetcher")
     }
@@ -175,5 +187,43 @@ mod tests {
             Some(ManifestFetcherError::EmptyAssetList)
         ));
         assert!(!manifest.exists());
+    }
+
+    #[tokio::test]
+    async fn redirect_to_off_list_host_refused() {
+        let target = respond("200 OK", BODY).await;
+        let location: &'static str = Box::leak(
+            format!(
+                "Location: {}/{REVISION}/Windows/LatestFileList.bin\r\n",
+                target.url.replace("127.0.0.1", "localhost")
+            )
+            .into_boxed_str(),
+        );
+        let server = respond_with("302 Found", location, b"").await;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let url = format!("{}/{REVISION}/Windows/LatestFileList.bin", server.url);
+        let fetcher = manifest_fetcher(url, dir.path());
+
+        assert!(fetcher.fetch_bin_manifest().await.is_err());
+
+        assert_eq!(target.hits(), 0);
+        assert!(
+            !dir.path()
+                .join(REVISION)
+                .join("LatestFileList.bin")
+                .exists()
+        );
+    }
+
+    #[tokio::test]
+    async fn more_than_three_redirects_refused() {
+        let server = respond_with("302 Found", "Location: /again\r\n", b"").await;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let url = format!("{}/{REVISION}/Windows/LatestFileList.bin", server.url);
+        let fetcher = manifest_fetcher(url, dir.path());
+
+        assert!(fetcher.fetch_bin_manifest().await.is_err());
+
+        assert_eq!(server.hits(), 4);
     }
 }

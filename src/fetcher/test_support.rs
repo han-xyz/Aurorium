@@ -22,6 +22,14 @@ impl Responder {
 }
 
 pub async fn respond(status: &'static str, body: &'static [u8]) -> Responder {
+    respond_with(status, "", body).await
+}
+
+pub async fn respond_with(
+    status: &'static str,
+    extra_headers: &'static str,
+    body: &'static [u8],
+) -> Responder {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr = listener.local_addr().expect("addr");
     let hits = Arc::new(AtomicUsize::new(0));
@@ -33,7 +41,7 @@ pub async fn respond(status: &'static str, body: &'static [u8]) -> Responder {
             let mut request = [0u8; 1024];
             let _ = socket.read(&mut request).await;
             let head = format!(
-                "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                "HTTP/1.1 {status}\r\n{extra_headers}Content-Length: {}\r\nConnection: close\r\n\r\n",
                 body.len()
             );
             socket.write_all(head.as_bytes()).await.expect("write head");

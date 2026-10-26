@@ -1,11 +1,80 @@
-use crate::{crc::Crc32, errors::FetcherTraitError};
+use crate::{crc::Crc32, errors::FetcherTraitError, wizard_patcher::WizardPatcher};
 use indicatif::ProgressBar;
-use reqwest::{Client, Response};
+use reqwest::{Client, Response, Url, redirect};
 use std::path::{Path, PathBuf};
 use tokio::{
     fs::create_dir_all,
     io::{AsyncWriteExt, BufWriter},
 };
+use tracing::warn;
+
+const MAX_REDIRECTS: usize = 3;
+
+/// Outbound allow-list: the configured patch host plus the hosts the patch server named,
+/// all under the scheme of the manifest URL.
+#[derive(Debug, Clone)]
+pub struct UrlPolicy {
+    scheme: String,
+    hosts: Vec<String>,
+}
+
+impl UrlPolicy {
+    pub fn new(wizard_patcher: &WizardPatcher) -> Self {
+        let list_url = Url::parse(&wizard_patcher.list_file_url).ok();
+        let prefix_url = Url::parse(&wizard_patcher.url_prefix).ok();
+        let hosts = [list_url.as_ref(), prefix_url.as_ref()]
+            .into_iter()
+            .flatten()
+            .filter_map(|url| url.host_str())
+            .chain([wizard_patcher.patch_host.as_str()])
+            .map(str::to_ascii_lowercase)
+            .collect();
+
+        Self {
+            scheme: list_url
+                .map(|url| url.scheme().to_string())
+                .unwrap_or_default(),
+            hosts,
+        }
+    }
+
+    pub fn check(&self, url: &str) -> Result<(), FetcherTraitError> {
+        match Url::parse(url) {
+            Ok(parsed) if self.allows(&parsed) => Ok(()),
+            _ => {
+                warn!(
+                    url,
+                    "refusing to fetch from a host or scheme outside the allow-list"
+                );
+                Err(FetcherTraitError::UrlRefused(url.to_string()))
+            }
+        }
+    }
+
+    pub fn redirect(&self) -> redirect::Policy {
+        let policy = self.clone();
+        redirect::Policy::custom(move |attempt| {
+            if attempt.previous().len() > MAX_REDIRECTS {
+                warn!(url = %attempt.url(), "refusing redirect: too many redirects");
+                return attempt.error("too many redirects");
+            }
+            if !policy.allows(attempt.url()) {
+                warn!(url = %attempt.url(), "refusing redirect outside the allow-list");
+                return attempt.error("redirect target is not allowed");
+            }
+            attempt.follow()
+        })
+    }
+
+    fn allows(&self, url: &Url) -> bool {
+        url.scheme() == self.scheme
+            && url.host_str().is_some_and(|host| {
+                self.hosts
+                    .iter()
+                    .any(|allowed| allowed.eq_ignore_ascii_case(host))
+            })
+    }
+}
 
 pub trait Fetcher {
     async fn fetch(client: &Client, url: &str) -> miette::Result<Response> {
@@ -124,13 +193,40 @@ pub trait Fetcher {
 
 #[cfg(test)]
 mod tests {
-    use super::Fetcher;
+    use super::{Fetcher, UrlPolicy};
     use crate::{
         errors::FetcherTraitError,
         fetcher::test_support::{BODY, BODY_CRC, respond},
+        revision::Revision,
+        wizard_patcher::WizardPatcher,
     };
     use reqwest::{Client, Response};
     use std::path::Path;
+
+    fn policy() -> UrlPolicy {
+        UrlPolicy::new(&WizardPatcher {
+            list_file_url:
+                "http://versions.example/WizPatcher/V_r1.Wizard_1_0/Windows/LatestFileList.bin"
+                    .to_string(),
+            url_prefix: "http://assets.example/WizPatcher/V_r1.Wizard_1_0".to_string(),
+            revision: Revision {
+                name: "V_r1.Wizard_1_0".to_string(),
+                number: 1,
+            },
+            patch_host: "patch.example".to_string(),
+        })
+    }
+
+    #[test]
+    fn url_policy_allows_named_hosts_only() {
+        let policy = policy();
+
+        assert!(policy.check("http://patch.example/a.wad").is_ok());
+        assert!(policy.check("http://versions.example/a.bin").is_ok());
+        assert!(policy.check("http://assets.example/a.wad").is_ok());
+        assert!(policy.check("http://evil.example/a.wad").is_err());
+        assert!(policy.check("https://assets.example/a.wad").is_err());
+    }
 
     struct TestFetcher;
     impl Fetcher for TestFetcher {}

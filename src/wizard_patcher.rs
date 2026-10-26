@@ -67,6 +67,7 @@ pub struct WizardPatcher {
     pub list_file_url: String,
     pub url_prefix: String,
     pub revision: Revision,
+    pub patch_host: String,
 }
 
 impl WizardPatcher {
@@ -124,10 +125,10 @@ impl WizardPatcher {
         }
 
         let _ = tokio::time::timeout(TCP_TIMEOUT, stream.shutdown()).await;
-        Self::parse_response(&response_buffer).await
+        Self::parse_response(&response_buffer, host).await
     }
 
-    async fn parse_response(buffer: &[u8; BUFFER_SIZE]) -> miette::Result<Self> {
+    async fn parse_response(buffer: &[u8; BUFFER_SIZE], patch_host: &str) -> miette::Result<Self> {
         let mut cursor: Cursor<[u8; BUFFER_SIZE]> = Cursor::new(*buffer);
 
         if !cursor.verify_food_header().await? {
@@ -145,6 +146,7 @@ impl WizardPatcher {
             revision: Self::capture_revision(&list_file_url)?,
             url_prefix,
             list_file_url,
+            patch_host: patch_host.to_string(),
         })
     }
 

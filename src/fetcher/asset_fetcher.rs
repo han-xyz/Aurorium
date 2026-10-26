@@ -2,7 +2,7 @@ use crate::{
     crc::Crc32,
     db::{Database, QueuedAsset},
     errors::AssetFetcherError,
-    fetcher::fetcher::Fetcher,
+    fetcher::fetcher::{Fetcher, UrlPolicy},
     revision::Asset,
     utils::is_safe_relative,
     wizard_patcher::WizardPatcher,
@@ -35,6 +35,7 @@ pub struct AssetFetcher<'a> {
     client: Client,
     concurrent_downloads: &'a NonZeroUsize,
     wizard_patcher: WizardPatcher,
+    url_policy: UrlPolicy,
     save_directory: PathBuf,
     assets: Vec<QueuedAsset>,
     db: Database,
@@ -53,7 +54,9 @@ impl<'a> AssetFetcher<'a> {
     where
         P: AsRef<Path>,
     {
+        let url_policy = UrlPolicy::new(&wizard_patcher);
         let client = Client::builder()
+            .redirect(url_policy.redirect())
             .user_agent("KingsIsle Patcher")
             .pool_max_idle_per_host(concurrent_downloads.get())
             .tcp_keepalive(Duration::from_mins(1))
@@ -65,6 +68,7 @@ impl<'a> AssetFetcher<'a> {
             client,
             save_directory: save_directory.as_ref().to_path_buf(),
             wizard_patcher,
+            url_policy,
             concurrent_downloads,
             assets,
             db,
@@ -95,6 +99,7 @@ impl<'a> AssetFetcher<'a> {
 
         let downloads = self.assets.iter().map(|queued| {
             let client = self.client.clone();
+            let url_policy = &self.url_policy;
             let url_prefix = self.wizard_patcher.url_prefix.clone();
             let save_dir = self.save_directory.clone();
             let db = self.db.clone();
@@ -112,6 +117,10 @@ impl<'a> AssetFetcher<'a> {
                     return;
                 }
                 let url = format!("{url_prefix}/{}", file.file_name);
+                if url_policy.check(&url).is_err() {
+                    main_progress.inc(1);
+                    return;
+                }
                 let save_path = save_dir.join(&queued.origin_revision).join(&file.file_name);
 
                 if Self::is_accepted_on_disk(&save_path, file, verify_crc).await {
@@ -271,9 +280,10 @@ mod tests {
             .await
             .expect("insert");
         let wizard_patcher = WizardPatcher {
-            list_file_url: String::new(),
+            list_file_url: format!("{}/LatestFileList.bin", server.url),
             url_prefix: server.url.clone(),
             revision,
+            patch_host: "patch.invalid".to_string(),
         };
 
         AssetFetcher::new(

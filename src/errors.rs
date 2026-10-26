@@ -168,6 +168,10 @@ pub enum FetcherTraitError {
     #[diagnostic(code(asset_fetcher::manifest_fetch))]
     Fetch(#[source] reqwest::Error, String),
 
+    #[error("Refused to fetch {0}: host or scheme is not allowed")]
+    #[diagnostic(code(asset_fetcher::url_refused))]
+    UrlRefused(String),
+
     #[error("File system I/O error")]
     #[diagnostic(code(asset_fetcher::io))]
     Io(#[source] std::io::Error),
